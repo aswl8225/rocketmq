@@ -1525,6 +1525,50 @@ public class CommitLog {
      * 同步刷盘
      * GroupCommit Service
      */
+//    为了锁住提交同步刷盘请求的线程，防止这个时候因为
+//    private void swapRequests() {
+//        List<GroupCommitRequest> tmp = this.requestsWrite;
+//        this.requestsWrite = this.requestsRead;
+//        this.requestsRead = tmp;
+//    }
+//    而使得requestsWrite集合被修改
+//
+//    而方法层面的加锁是为了保证提交的GroupCommitRequest的顺序性，防止多线程环境下重复提交GroupCommitRequest
+//
+//    如果不是同步方法，很可能一个线程准备执行putRequest方法时，发生线程切换，另外的线程调用了putRequest方法，
+//    这样在硬盘上的commitLog消息就有重复
+//
+//    public synchronized void putRequest(final GroupCommitRequest request) {
+//    //由于requestsWrite的类型是ArrayList，所以必须同步防止在add时requestsWrite集合被外部线程修改
+//        synchronized (this.requestsWrite) {
+//            this.requestsWrite.add(request);
+//        }
+//        if (hasNotified.compareAndSet(false, true)) {
+//            waitPoint.countDown(); // notify同步刷盘线程执行doCommit()
+//        }
+//    }
+//
+//    首先，同步刷盘线程会执行waitForRunning，第一步就是
+//        if (hasNotified.compareAndSet(true, false)) {
+//        this.onWaitEnd();
+//        return;
+//    }
+//
+//    而
+//    public synchronized void putRequest(final GroupCommitRequest request) {
+//        //由于requestsWrite的类型是ArrayList，所以必须同步防止在add时requestsWrite集合被外部线程修改
+//        synchronized (this.requestsWrite) {
+//            this.requestsWrite.add(request);
+//        }
+//        if (hasNotified.compareAndSet(false, true)) {
+//            waitPoint.countDown(); // notify同步刷盘线程执行doCommit()
+//        }
+//    }
+//    在putRequests方法在结束对requestsWrite集合的添加元素后会通过CAS修改hasNotified为true，然后再释放计数器
+//
+//    那么异线程这个时候如果通过hasNotified.compareAndSet(true, false)操作成功后，才去执行交换读、写集合里的元素
+//
+//    这是存在happens-before关系的
     class GroupCommitService extends FlushCommitLogService {
         private volatile List<GroupCommitRequest> requestsWrite = new ArrayList<GroupCommitRequest>();
         private volatile List<GroupCommitRequest> requestsRead = new ArrayList<GroupCommitRequest>();
