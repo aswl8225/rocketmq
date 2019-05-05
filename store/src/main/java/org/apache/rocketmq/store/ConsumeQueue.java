@@ -158,7 +158,7 @@ public class ConsumeQueue {
                         /**
                          * 当前consumerqueue对应的offset
                          */
-                        this.maxPhysicOffset = offset;
+                        this.maxPhysicOffset = offset + size;
                         /**
                          * 验证tagsCode是否小于Integer.MIN_VALUE
                          */
@@ -347,7 +347,7 @@ public class ConsumeQueue {
 
         int logicFileSize = this.mappedFileSize;
 
-        this.maxPhysicOffset = phyOffet - 1;
+        this.maxPhysicOffset = phyOffet;
         long maxExtAddr = 1;
         while (true) {
             /**
@@ -393,7 +393,7 @@ public class ConsumeQueue {
                             mappedFile.setWrotePosition(pos);
                             mappedFile.setCommittedPosition(pos);
                             mappedFile.setFlushedPosition(pos);
-                            this.maxPhysicOffset = offset;
+                            this.maxPhysicOffset = offset + size;
                             // This maybe not take effect, when not every consume queue has extend file.
                             if (isExtAddr(tagsCode)) {
                                 maxExtAddr = tagsCode;
@@ -416,7 +416,7 @@ public class ConsumeQueue {
                             mappedFile.setWrotePosition(pos);
                             mappedFile.setCommittedPosition(pos);
                             mappedFile.setFlushedPosition(pos);
-                            this.maxPhysicOffset = offset;
+                            this.maxPhysicOffset = offset + size;
                             if (isExtAddr(tagsCode)) {
                                 maxExtAddr = tagsCode;
                             }
@@ -522,7 +522,7 @@ public class ConsumeQueue {
                              * 设置queue对应的minLogicOffset
                              * 大于minPhyOffset且最小的一个
                              */
-                            this.minLogicOffset = result.getMappedFile().getFileFromOffset() + i;
+                            this.minLogicOffset = mappedFile.getFileFromOffset() + i;
                             log.info("Compute logical min offset: {}, topic: {}, queueId: {}",
                                 this.getMinOffsetInQueue(), this.topic, this.queueId);
                             // This maybe not take effect, when not every consume queue has extend file.
@@ -630,7 +630,8 @@ public class ConsumeQueue {
         /**
          * consumequeue已处理过当前offset
          */
-        if (offset <= this.maxPhysicOffset) {
+        if (offset + size <= this.maxPhysicOffset) {
+            log.warn("Maybe try to build consume queue repeatedly maxPhysicOffset={} phyOffset={}", maxPhysicOffset, offset);
             return true;
         }
 
@@ -715,7 +716,7 @@ public class ConsumeQueue {
             /**
              * 当前consumequeue存储得最大commitlog对应得offset
              */
-            this.maxPhysicOffset = offset;
+            this.maxPhysicOffset = offset + size;
             /**
              * 将byteBufferIndex写入filechannel
              */
