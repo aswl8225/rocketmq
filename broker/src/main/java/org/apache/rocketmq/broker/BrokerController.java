@@ -27,10 +27,12 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
+
 import org.apache.rocketmq.acl.AccessValidator;
 import org.apache.rocketmq.broker.client.ClientHousekeepingService;
 import org.apache.rocketmq.broker.client.ConsumerIdsChangeListener;
@@ -39,6 +41,7 @@ import org.apache.rocketmq.broker.client.DefaultConsumerIdsChangeListener;
 import org.apache.rocketmq.broker.client.ProducerManager;
 import org.apache.rocketmq.broker.client.net.Broker2Client;
 import org.apache.rocketmq.broker.client.rebalance.RebalanceLockManager;
+import org.apache.rocketmq.broker.dledger.DLedgerRoleChangeHandler;
 import org.apache.rocketmq.broker.filter.CommitLogDispatcherCalcBitMap;
 import org.apache.rocketmq.broker.filter.ConsumerFilterManager;
 import org.apache.rocketmq.broker.filtersrv.FilterServerManager;
@@ -99,6 +102,7 @@ import org.apache.rocketmq.store.MessageArrivingListener;
 import org.apache.rocketmq.store.MessageStore;
 import org.apache.rocketmq.store.config.BrokerRole;
 import org.apache.rocketmq.store.config.MessageStoreConfig;
+import org.apache.rocketmq.store.dledger.DLedgerCommitLog;
 import org.apache.rocketmq.store.stats.BrokerStats;
 import org.apache.rocketmq.store.stats.BrokerStatsManager;
 
@@ -124,7 +128,7 @@ public class BrokerController {
     private final RebalanceLockManager rebalanceLockManager = new RebalanceLockManager();
     private final BrokerOuterAPI brokerOuterAPI;
     private final ScheduledExecutorService scheduledExecutorService = Executors.newSingleThreadScheduledExecutor(new ThreadFactoryImpl(
-        "BrokerControllerScheduledThread"));
+            "BrokerControllerScheduledThread"));
     private final SlaveSynchronize slaveSynchronize;
     private final BlockingQueue<Runnable> sendThreadPoolQueue;
     private final BlockingQueue<Runnable> pullThreadPoolQueue;
@@ -158,13 +162,14 @@ public class BrokerController {
     private TransactionalMessageCheckService transactionalMessageCheckService;
     private TransactionalMessageService transactionalMessageService;
     private AbstractTransactionalMessageCheckListener transactionalMessageCheckListener;
+    private Future<?> slaveSyncFuture;
 
 
     public BrokerController(
-        final BrokerConfig brokerConfig,
-        final NettyServerConfig nettyServerConfig,
-        final NettyClientConfig nettyClientConfig,
-        final MessageStoreConfig messageStoreConfig
+            final BrokerConfig brokerConfig,
+            final NettyServerConfig nettyServerConfig,
+            final NettyClientConfig nettyClientConfig,
+            final MessageStoreConfig messageStoreConfig
     ) {
         this.brokerConfig = brokerConfig;
         this.nettyServerConfig = nettyServerConfig;
@@ -218,9 +223,9 @@ public class BrokerController {
          * 将对象的属性赋值给 allConfigs<Properties>
          */
         this.configuration = new Configuration(
-            log,
-            BrokerPathConfigHelper.getBrokerConfigPath(),
-            this.brokerConfig, this.nettyServerConfig, this.nettyClientConfig, this.messageStoreConfig
+                log,
+                BrokerPathConfigHelper.getBrokerConfigPath(),
+                this.brokerConfig, this.nettyServerConfig, this.nettyClientConfig, this.messageStoreConfig
         );
     }
 
@@ -260,8 +265,14 @@ public class BrokerController {
                  * 实例化DefaultMessageStore
                  */
                 this.messageStore =
+
                     new DefaultMessageStore(this.messageStoreConfig, this.brokerStatsManager, this.messageArrivingListener,
                         this.brokerConfig);
+                if (messageStoreConfig.isEnableDLegerCommitLog()) {
+                    DLedgerRoleChangeHandler roleChangeHandler = new DLedgerRoleChangeHandler(this, (DefaultMessageStore) messageStore);
+                    ((DLedgerCommitLog)((DefaultMessageStore) messageStore).getCommitLog()).getdLedgerServer().getdLedgerLeaderElector().addRoleChangeHandler(roleChangeHandler);
+                }
+
                 this.brokerStats = new BrokerStats((DefaultMessageStore) this.messageStore);
                 //load plugin
                 MessageStorePluginContext context = new MessageStorePluginContext(messageStoreConfig, brokerStatsManager, messageArrivingListener, brokerConfig);
@@ -294,60 +305,60 @@ public class BrokerController {
             fastConfig.setListenPort(nettyServerConfig.getListenPort() - 2);
             this.fastRemotingServer = new NettyRemotingServer(fastConfig, this.clientHousekeepingService);
             this.sendMessageExecutor = new BrokerFixedThreadPoolExecutor(
-                this.brokerConfig.getSendMessageThreadPoolNums(),
-                this.brokerConfig.getSendMessageThreadPoolNums(),
-                1000 * 60,
-                TimeUnit.MILLISECONDS,
-                this.sendThreadPoolQueue,
-                new ThreadFactoryImpl("SendMessageThread_"));
+                    this.brokerConfig.getSendMessageThreadPoolNums(),
+                    this.brokerConfig.getSendMessageThreadPoolNums(),
+                    1000 * 60,
+                    TimeUnit.MILLISECONDS,
+                    this.sendThreadPoolQueue,
+                    new ThreadFactoryImpl("SendMessageThread_"));
 
             this.pullMessageExecutor = new BrokerFixedThreadPoolExecutor(
-                this.brokerConfig.getPullMessageThreadPoolNums(),
-                this.brokerConfig.getPullMessageThreadPoolNums(),
-                1000 * 60,
-                TimeUnit.MILLISECONDS,
-                this.pullThreadPoolQueue,
-                new ThreadFactoryImpl("PullMessageThread_"));
+                    this.brokerConfig.getPullMessageThreadPoolNums(),
+                    this.brokerConfig.getPullMessageThreadPoolNums(),
+                    1000 * 60,
+                    TimeUnit.MILLISECONDS,
+                    this.pullThreadPoolQueue,
+                    new ThreadFactoryImpl("PullMessageThread_"));
 
             this.queryMessageExecutor = new BrokerFixedThreadPoolExecutor(
-                this.brokerConfig.getQueryMessageThreadPoolNums(),
-                this.brokerConfig.getQueryMessageThreadPoolNums(),
-                1000 * 60,
-                TimeUnit.MILLISECONDS,
-                this.queryThreadPoolQueue,
-                new ThreadFactoryImpl("QueryMessageThread_"));
+                    this.brokerConfig.getQueryMessageThreadPoolNums(),
+                    this.brokerConfig.getQueryMessageThreadPoolNums(),
+                    1000 * 60,
+                    TimeUnit.MILLISECONDS,
+                    this.queryThreadPoolQueue,
+                    new ThreadFactoryImpl("QueryMessageThread_"));
 
             this.adminBrokerExecutor =
-                Executors.newFixedThreadPool(this.brokerConfig.getAdminBrokerThreadPoolNums(), new ThreadFactoryImpl(
-                    "AdminBrokerThread_"));
+                    Executors.newFixedThreadPool(this.brokerConfig.getAdminBrokerThreadPoolNums(), new ThreadFactoryImpl(
+                            "AdminBrokerThread_"));
 
             this.clientManageExecutor = new ThreadPoolExecutor(
-                this.brokerConfig.getClientManageThreadPoolNums(),
-                this.brokerConfig.getClientManageThreadPoolNums(),
-                1000 * 60,
-                TimeUnit.MILLISECONDS,
-                this.clientManagerThreadPoolQueue,
-                new ThreadFactoryImpl("ClientManageThread_"));
+                    this.brokerConfig.getClientManageThreadPoolNums(),
+                    this.brokerConfig.getClientManageThreadPoolNums(),
+                    1000 * 60,
+                    TimeUnit.MILLISECONDS,
+                    this.clientManagerThreadPoolQueue,
+                    new ThreadFactoryImpl("ClientManageThread_"));
 
             this.heartbeatExecutor = new BrokerFixedThreadPoolExecutor(
-                this.brokerConfig.getHeartbeatThreadPoolNums(),
-                this.brokerConfig.getHeartbeatThreadPoolNums(),
-                1000 * 60,
-                TimeUnit.MILLISECONDS,
-                this.heartbeatThreadPoolQueue,
-                new ThreadFactoryImpl("HeartbeatThread_", true));
+                    this.brokerConfig.getHeartbeatThreadPoolNums(),
+                    this.brokerConfig.getHeartbeatThreadPoolNums(),
+                    1000 * 60,
+                    TimeUnit.MILLISECONDS,
+                    this.heartbeatThreadPoolQueue,
+                    new ThreadFactoryImpl("HeartbeatThread_", true));
 
             this.endTransactionExecutor = new BrokerFixedThreadPoolExecutor(
-                this.brokerConfig.getEndTransactionThreadPoolNums(),
-                this.brokerConfig.getEndTransactionThreadPoolNums(),
-                1000 * 60,
-                TimeUnit.MILLISECONDS,
-                this.endTransactionThreadPoolQueue,
-                new ThreadFactoryImpl("EndTransactionThread_"));
+                    this.brokerConfig.getEndTransactionThreadPoolNums(),
+                    this.brokerConfig.getEndTransactionThreadPoolNums(),
+                    1000 * 60,
+                    TimeUnit.MILLISECONDS,
+                    this.endTransactionThreadPoolQueue,
+                    new ThreadFactoryImpl("EndTransactionThread_"));
 
             this.consumerManageExecutor =
-                Executors.newFixedThreadPool(this.brokerConfig.getConsumerManageThreadPoolNums(), new ThreadFactoryImpl(
-                    "ConsumerManageThread_"));
+                    Executors.newFixedThreadPool(this.brokerConfig.getConsumerManageThreadPoolNums(), new ThreadFactoryImpl(
+                            "ConsumerManageThread_"));
 
             /**
              * 注册processorTable
@@ -478,6 +489,27 @@ public class BrokerController {
                 }, 1000 * 10, 1000 * 60 * 2, TimeUnit.MILLISECONDS);
             }
 
+            if (!messageStoreConfig.isEnableDLegerCommitLog()) {
+                if (BrokerRole.SLAVE == this.messageStoreConfig.getBrokerRole()) {
+                    if (this.messageStoreConfig.getHaMasterAddress() != null && this.messageStoreConfig.getHaMasterAddress().length() >= 6) {
+                        this.messageStore.updateHaMasterAddress(this.messageStoreConfig.getHaMasterAddress());
+                        this.updateMasterHAServerAddrPeriodically = false;
+                    } else {
+                        this.updateMasterHAServerAddrPeriodically = true;
+                    }
+                } else {
+                    this.scheduledExecutorService.scheduleAtFixedRate(new Runnable() {
+                        @Override
+                        public void run() {
+                            try {
+                                BrokerController.this.printMasterAndSlaveDiff();
+                            } catch (Throwable e) {
+                                log.error("schedule printMasterAndSlaveDiff error.", e);
+                            }
+                        }
+                    }, 1000 * 10, 1000 * 60, TimeUnit.MILLISECONDS);
+                }
+            }
             /**
              * tls默认permissive    ???????
              */
@@ -485,38 +517,38 @@ public class BrokerController {
                 // Register a listener to reload SslContext
                 try {
                     fileWatchService = new FileWatchService(
-                        new String[] {
-                            TlsSystemConfig.tlsServerCertPath,
-                            TlsSystemConfig.tlsServerKeyPath,
-                            TlsSystemConfig.tlsServerTrustCertPath
-                        },
-                        new FileWatchService.Listener() {
-                            boolean certChanged, keyChanged = false;
+                            new String[]{
+                                    TlsSystemConfig.tlsServerCertPath,
+                                    TlsSystemConfig.tlsServerKeyPath,
+                                    TlsSystemConfig.tlsServerTrustCertPath
+                            },
+                            new FileWatchService.Listener() {
+                                boolean certChanged, keyChanged = false;
 
-                            @Override
-                            public void onChanged(String path) {
-                                if (path.equals(TlsSystemConfig.tlsServerTrustCertPath)) {
-                                    log.info("The trust certificate changed, reload the ssl context");
-                                    reloadServerSslContext();
+                                @Override
+                                public void onChanged(String path) {
+                                    if (path.equals(TlsSystemConfig.tlsServerTrustCertPath)) {
+                                        log.info("The trust certificate changed, reload the ssl context");
+                                        reloadServerSslContext();
+                                    }
+                                    if (path.equals(TlsSystemConfig.tlsServerCertPath)) {
+                                        certChanged = true;
+                                    }
+                                    if (path.equals(TlsSystemConfig.tlsServerKeyPath)) {
+                                        keyChanged = true;
+                                    }
+                                    if (certChanged && keyChanged) {
+                                        log.info("The certificate and private key changed, reload the ssl context");
+                                        certChanged = keyChanged = false;
+                                        reloadServerSslContext();
+                                    }
                                 }
-                                if (path.equals(TlsSystemConfig.tlsServerCertPath)) {
-                                    certChanged = true;
-                                }
-                                if (path.equals(TlsSystemConfig.tlsServerKeyPath)) {
-                                    keyChanged = true;
-                                }
-                                if (certChanged && keyChanged) {
-                                    log.info("The certificate and private key changed, reload the ssl context");
-                                    certChanged = keyChanged = false;
-                                    reloadServerSslContext();
-                                }
-                            }
 
-                            private void reloadServerSslContext() {
-                                ((NettyRemotingServer) remotingServer).loadSslContext();
-                                ((NettyRemotingServer) fastRemotingServer).loadSslContext();
-                            }
-                        });
+                                private void reloadServerSslContext() {
+                                    ((NettyRemotingServer) remotingServer).loadSslContext();
+                                    ((NettyRemotingServer) fastRemotingServer).loadSslContext();
+                                }
+                            });
                 } catch (Exception e) {
                     log.warn("FileWatchService created error, can't load the certificate dynamically");
                 }
@@ -558,7 +590,7 @@ public class BrokerController {
             return;
         }
 
-        for (AccessValidator accessValidator: accessValidators) {
+        for (AccessValidator accessValidator : accessValidators) {
             final AccessValidator validator = accessValidator;
             this.registerServerRPCHook(new RPCHook() {
 
@@ -582,7 +614,7 @@ public class BrokerController {
         if (rpcHooks == null || rpcHooks.isEmpty()) {
             return;
         }
-        for (RPCHook rpcHook: rpcHooks) {
+        for (RPCHook rpcHook : rpcHooks) {
             this.registerServerRPCHook(rpcHook);
         }
     }
@@ -868,10 +900,10 @@ public class BrokerController {
 
     private void unregisterBrokerAll() {
         this.brokerOuterAPI.unregisterBrokerAll(
-            this.brokerConfig.getBrokerClusterName(),
-            this.getBrokerAddr(),
-            this.brokerConfig.getBrokerName(),
-            this.brokerConfig.getBrokerId());
+                this.brokerConfig.getBrokerClusterName(),
+                this.getBrokerAddr(),
+                this.brokerConfig.getBrokerName(),
+                this.brokerConfig.getBrokerId());
     }
 
     public String getBrokerAddr() {
@@ -932,9 +964,11 @@ public class BrokerController {
             this.filterServerManager.start();
         }
 
-        /**
-         * 向nameserver注册broker信息
-         */
+        if (!messageStoreConfig.isEnableDLegerCommitLog()) {
+            startProcessorByHa(messageStoreConfig.getBrokerRole());
+            handleSlaveSynchronize(messageStoreConfig.getBrokerRole());
+        }
+
         this.registerBrokerAll(true, false, true);
 
         this.scheduledExecutorService.scheduleAtFixedRate(new Runnable() {
@@ -972,10 +1006,10 @@ public class BrokerController {
     public synchronized void registerIncrementBrokerData(TopicConfig topicConfig, DataVersion dataVersion) {
         TopicConfig registerTopicConfig = topicConfig;
         if (!PermName.isWriteable(this.getBrokerConfig().getBrokerPermission())
-            || !PermName.isReadable(this.getBrokerConfig().getBrokerPermission())) {
+                || !PermName.isReadable(this.getBrokerConfig().getBrokerPermission())) {
             registerTopicConfig =
-                new TopicConfig(topicConfig.getTopicName(), topicConfig.getReadQueueNums(), topicConfig.getWriteQueueNums(),
-                    this.brokerConfig.getBrokerPermission());
+                    new TopicConfig(topicConfig.getTopicName(), topicConfig.getReadQueueNums(), topicConfig.getWriteQueueNums(),
+                            this.brokerConfig.getBrokerPermission());
         }
 
         ConcurrentMap<String, TopicConfig> topicConfigTable = new ConcurrentHashMap<String, TopicConfig>();
@@ -989,6 +1023,7 @@ public class BrokerController {
 
     /**
      * 是否需要通知nameserver  broker的topic发生变化
+     *
      * @param checkOrderConfig
      * @param oneway
      * @param forceRegister
@@ -1004,15 +1039,15 @@ public class BrokerController {
          * 修改topicConfigWrapper中topic的权限
          */
         if (!PermName.isWriteable(this.getBrokerConfig().getBrokerPermission())
-            || !PermName.isReadable(this.getBrokerConfig().getBrokerPermission())) {
+                || !PermName.isReadable(this.getBrokerConfig().getBrokerPermission())) {
             ConcurrentHashMap<String, TopicConfig> topicConfigTable = new ConcurrentHashMap<String, TopicConfig>();
             /**
              * 修改topic对应的perm为broker的权限
              */
             for (TopicConfig topicConfig : topicConfigWrapper.getTopicConfigTable().values()) {
                 TopicConfig tmp =
-                    new TopicConfig(topicConfig.getTopicName(), topicConfig.getReadQueueNums(), topicConfig.getWriteQueueNums(),
-                        this.brokerConfig.getBrokerPermission());
+                        new TopicConfig(topicConfig.getTopicName(), topicConfig.getReadQueueNums(), topicConfig.getWriteQueueNums(),
+                                this.brokerConfig.getBrokerPermission());
                 topicConfigTable.put(topicConfig.getTopicName(), tmp);
             }
             topicConfigWrapper.setTopicConfigTable(topicConfigTable);
@@ -1022,10 +1057,10 @@ public class BrokerController {
          * 判断是否需要向nameserver发送broker信息注册  即topic信息改变后还没有通知nameserver
          */
         if (forceRegister || needRegister(this.brokerConfig.getBrokerClusterName(),
-            this.getBrokerAddr(),
-            this.brokerConfig.getBrokerName(),
-            this.brokerConfig.getBrokerId(),
-            this.brokerConfig.getRegisterBrokerTimeoutMills())) {
+                this.getBrokerAddr(),
+                this.brokerConfig.getBrokerName(),
+                this.brokerConfig.getBrokerId(),
+                this.brokerConfig.getRegisterBrokerTimeoutMills())) {
 
             /**
              * 向nameserver发起注册交易  通知topic发生变化
@@ -1036,26 +1071,27 @@ public class BrokerController {
 
     /**
      * broker向nameserver发起注册交易
+     *
      * @param checkOrderConfig
      * @param oneway
      * @param topicConfigWrapper
      */
     private void doRegisterBrokerAll(boolean checkOrderConfig, boolean oneway,
-        TopicConfigSerializeWrapper topicConfigWrapper) {
+                                     TopicConfigSerializeWrapper topicConfigWrapper) {
         /**
          * 向所有的nameserver发起注册交易   上送broker信息
          */
         List<RegisterBrokerResult> registerBrokerResultList = this.brokerOuterAPI.registerBrokerAll(
-            this.brokerConfig.getBrokerClusterName(),
-            this.getBrokerAddr(),
-            this.brokerConfig.getBrokerName(),
-            this.brokerConfig.getBrokerId(),
-            this.getHAServerAddr(),
-            topicConfigWrapper,
-            this.filterServerManager.buildNewFilterServerList(),
-            oneway,
-            this.brokerConfig.getRegisterBrokerTimeoutMills(),
-            this.brokerConfig.isCompressedRegister());
+                this.brokerConfig.getBrokerClusterName(),
+                this.getBrokerAddr(),
+                this.brokerConfig.getBrokerName(),
+                this.brokerConfig.getBrokerId(),
+                this.getHAServerAddr(),
+                topicConfigWrapper,
+                this.filterServerManager.buildNewFilterServerList(),
+                oneway,
+                this.brokerConfig.getRegisterBrokerTimeoutMills(),
+                this.brokerConfig.isCompressedRegister());
 
 
         /**
@@ -1080,6 +1116,7 @@ public class BrokerController {
     /**
      * 判断是否需要向nameserver发送broker信息注册
      * 即topic信息改变后还没有通知nameserver
+     *
      * @param clusterName
      * @param brokerAddr
      * @param brokerName
@@ -1088,10 +1125,10 @@ public class BrokerController {
      * @return
      */
     private boolean needRegister(final String clusterName,
-        final String brokerAddr,
-        final String brokerName,
-        final long brokerId,
-        final int timeoutMills) {
+                                 final String brokerAddr,
+                                 final String brokerName,
+                                 final long brokerId,
+                                 final int timeoutMills) {
 
         TopicConfigSerializeWrapper topicConfigWrapper = this.getTopicConfigManager().buildTopicConfigSerializeWrapper();
 
@@ -1209,7 +1246,7 @@ public class BrokerController {
     }
 
     public void setTransactionalMessageCheckService(
-        TransactionalMessageCheckService transactionalMessageCheckService) {
+            TransactionalMessageCheckService transactionalMessageCheckService) {
         this.transactionalMessageCheckService = transactionalMessageCheckService;
     }
 
@@ -1226,7 +1263,7 @@ public class BrokerController {
     }
 
     public void setTransactionalMessageCheckListener(
-        AbstractTransactionalMessageCheckListener transactionalMessageCheckListener) {
+            AbstractTransactionalMessageCheckListener transactionalMessageCheckListener) {
         this.transactionalMessageCheckListener = transactionalMessageCheckListener;
     }
 
@@ -1235,4 +1272,118 @@ public class BrokerController {
         return endTransactionThreadPoolQueue;
 
     }
+
+
+
+    private void handleSlaveSynchronize(BrokerRole role) {
+        if (role == BrokerRole.SLAVE) {
+            if (null != slaveSyncFuture) {
+                slaveSyncFuture.cancel(false);
+            }
+            this.slaveSynchronize.setMasterAddr(null);
+            slaveSyncFuture = this.scheduledExecutorService.scheduleAtFixedRate(new Runnable() {
+                @Override
+                public void run() {
+                    try {
+                        BrokerController.this.slaveSynchronize.syncAll();
+                    }
+                    catch (Throwable e) {
+                        log.error("ScheduledTask SlaveSynchronize syncAll error.", e);
+                    }
+                }
+            }, 1000 * 3, 1000 * 10, TimeUnit.MILLISECONDS);
+        } else {
+            //handle the slave synchronise
+            if (null != slaveSyncFuture) {
+                slaveSyncFuture.cancel(false);
+            }
+            this.slaveSynchronize.setMasterAddr(null);
+        }
+    }
+
+    public void changeToSlave(int brokerId) {
+        log.info("Begin to change to slave brokerName={} brokerId={}", brokerConfig.getBrokerName(), brokerId);
+
+        //change the role
+        brokerConfig.setBrokerId(brokerId == 0 ? 1 : brokerId); //TO DO check
+        messageStoreConfig.setBrokerRole(BrokerRole.SLAVE);
+
+        //handle the scheduled service
+        try {
+            this.messageStore.handleScheduleMessageService(BrokerRole.SLAVE);
+        } catch (Throwable t) {
+            log.error("[MONITOR] handleScheduleMessageService failed when changing to slave", t);
+        }
+
+        //handle the transactional service
+        try {
+            this.shutdownProcessorByHa();
+        } catch (Throwable t) {
+            log.error("[MONITOR] shutdownProcessorByHa failed when changing to slave", t);
+        }
+
+        //handle the slave synchronise
+        handleSlaveSynchronize(BrokerRole.SLAVE);
+
+        try {
+            this.registerBrokerAll(true, true, brokerConfig.isForceRegister());
+        } catch (Throwable ignored) {
+
+        }
+        log.info("Finish to change to slave brokerName={} brokerId={}", brokerConfig.getBrokerName(), brokerId);
+    }
+
+
+
+    public void changeToMaster(BrokerRole role) {
+        if (role == BrokerRole.SLAVE) {
+            return;
+        }
+        log.info("Begin to change to master brokerName={}", brokerConfig.getBrokerName());
+
+        //handle the slave synchronise
+        handleSlaveSynchronize(role);
+
+        //handle the scheduled service
+        try {
+            this.messageStore.handleScheduleMessageService(role);
+        } catch (Throwable t) {
+            log.error("[MONITOR] handleScheduleMessageService failed when changing to master", t);
+        }
+
+        //handle the transactional service
+        try {
+            this.startProcessorByHa(BrokerRole.SYNC_MASTER);
+        } catch (Throwable t) {
+            log.error("[MONITOR] startProcessorByHa failed when changing to master", t);
+        }
+
+        //if the operations above are totally successful, we change to master
+        brokerConfig.setBrokerId(0); //TO DO check
+        messageStoreConfig.setBrokerRole(role);
+
+        try {
+            this.registerBrokerAll(true, true, brokerConfig.isForceRegister());
+        } catch (Throwable ignored) {
+
+        }
+        log.info("Finish to change to master brokerName={}", brokerConfig.getBrokerName());
+    }
+
+    private void startProcessorByHa(BrokerRole role) {
+        if (BrokerRole.SLAVE != role) {
+            if (this.transactionalMessageCheckService != null) {
+                this.transactionalMessageCheckService.start();
+            }
+        }
+    }
+
+    private void shutdownProcessorByHa() {
+        if (this.transactionalMessageCheckService != null) {
+            this.transactionalMessageCheckService.shutdown(true);
+        }
+    }
+
+
+
 }
