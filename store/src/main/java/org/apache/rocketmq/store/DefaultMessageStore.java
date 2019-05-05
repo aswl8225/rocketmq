@@ -107,10 +107,7 @@ public class DefaultMessageStore implements MessageStore {
         this.brokerStatsManager = brokerStatsManager;
         this.allocateMappedFileService = new AllocateMappedFileService(this);
 
-        /**
-         * 实例化CommitLog  设置刷盘机制   锁机制以及消息最大size
-         */
-        this.commitLog = new CommitLog(this);
+
         this.consumeQueueTable = new ConcurrentHashMap<>(32);
 
         this.flushConsumeQueueService = new FlushConsumeQueueService();
@@ -127,10 +124,7 @@ public class DefaultMessageStore implements MessageStore {
          */
         this.indexService = new IndexService(this);
 
-        /**
-         * 初始化HAService  设置端口
-         */
-        this.haService = new HAService(this);
+
 
         this.reputMessageService = new ReputMessageService();
 
@@ -292,34 +286,10 @@ public class DefaultMessageStore implements MessageStore {
          */
         this.storeStatsService.start();
 
-        /**
-         * 定时持久化到store/config/delayOffset.json
-         *
-         * 对SCHEDULE_TOPIC_XXXX进行延迟投递
-         */
-        if (this.scheduleMessageService != null && SLAVE != messageStoreConfig.getBrokerRole()) {
-            this.scheduleMessageService.start();
-        }
 
-        if (this.getMessageStoreConfig().isDuplicationEnable()) {
-            this.reputMessageService.setReputFromOffset(this.commitLog.getConfirmOffset());
-        } else {
-            /**
-             * 初始化
-             * 设置当前写入消息的最大位置为reputFromOffset，即从reputFromOffset开始，获得消息内容，写入consumequeue（内存中）和index
-             */
-            this.reputMessageService.setReputFromOffset(this.commitLog.getMaxOffset());
-        }
 
-        /**
-         * 将commitlog中得数据  缓存到consumequeue（内存中）和index（如果最后一个文件已经写满  则刷盘并创建一个新文件）
-         */
-        this.reputMessageService.start();
 
-        /**
-         * 主从同步？？？？
-         */
-        this.haService.start();
+
 
         /**
          * 创建abort文件   如果正常退出则会删除该文件
@@ -350,7 +320,6 @@ public class DefaultMessageStore implements MessageStore {
                 this.scheduleMessageService.shutdown();
             }
 
-            this.haService.shutdown();
 
             this.storeStatsService.shutdown();
             this.indexService.shutdown();
@@ -2261,10 +2230,7 @@ public class DefaultMessageStore implements MessageStore {
                             DispatchRequest dispatchRequest =
                                 DefaultMessageStore.this.commitLog.checkMessageAndReturnSize(result.getByteBuffer(), false, false);
 
-                            /**
-                             * 消息大小
-                             */
-                            int size = dispatchRequest.getMsgSize();
+                           int size = dispatchRequest.getMsgSize();
 
                             if (dispatchRequest.isSuccess()) {
                                 if (size > 0) {
@@ -2346,20 +2312,7 @@ public class DefaultMessageStore implements MessageStore {
                                      * 异常或者没有数据
                                      */
                                     doNext = false;
-                                    if (DefaultMessageStore.this.brokerConfig.getBrokerId() == MixAll.MASTER_ID) {
-                                        log.error("[BUG]the master dispatch message to consume queue error, COMMITLOG OFFSET: {}",
-                                            this.reputFromOffset);
 
-                                        /**
-                                         * 将剩余未读的消息也记入reputFromOffset中  即达到这一批最大的offset
-                                         * reputFromOffset    result.getSize()     readsize      size
-                                         *     10                  1000                0                   初始
-                                         *     110                 1000               100         100      1st
-                                         *     160                 1000               150          50      2nd
-                                         * 160+1000-150=1010       1000                                    3rd   本次进入当前判断
-                                         */
-                                        this.reputFromOffset += result.getSize() - readSize;
-                                    }
                                 }
                             }
                         }
