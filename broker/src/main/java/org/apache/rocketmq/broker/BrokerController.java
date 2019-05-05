@@ -478,47 +478,7 @@ public class BrokerController {
                 }, 1000 * 10, 1000 * 60 * 2, TimeUnit.MILLISECONDS);
             }
 
-            /**
-             * slave时执行
-             */
-            if (BrokerRole.SLAVE == this.messageStoreConfig.getBrokerRole()) {
-                if (this.messageStoreConfig.getHaMasterAddress() != null && this.messageStoreConfig.getHaMasterAddress().length() >= 6) {
-                    this.messageStore.updateHaMasterAddress(this.messageStoreConfig.getHaMasterAddress());
-                    this.updateMasterHAServerAddrPeriodically = false;
-                } else {
-                    this.updateMasterHAServerAddrPeriodically = true;
-                }
 
-                this.scheduledExecutorService.scheduleAtFixedRate(new Runnable() {
-
-                    @Override
-                    public void run() {
-                        try {
-                            BrokerController.this.slaveSynchronize.syncAll();
-                        } catch (Throwable e) {
-                            log.error("ScheduledTask syncAll slave exception", e);
-                        }
-                    }
-                }, 1000 * 10, 1000 * 60, TimeUnit.MILLISECONDS);
-            } else {
-                /**
-                 * master时执行
-                 */
-                this.scheduledExecutorService.scheduleAtFixedRate(new Runnable() {
-
-                    @Override
-                    public void run() {
-                        try {
-                            /**
-                             * ？？？？？？？？？？？？
-                             */
-                            BrokerController.this.printMasterAndSlaveDiff();
-                        } catch (Throwable e) {
-                            log.error("schedule printMasterAndSlaveDiff error.", e);
-                        }
-                    }
-                }, 1000 * 10, 1000 * 60, TimeUnit.MILLISECONDS);
-            }
 
             /**
              * tls默认permissive    ?????????????
@@ -1008,15 +968,7 @@ public class BrokerController {
             this.brokerFastFailure.start();
         }
 
-        /**
-         * master时   检查事务消息
-         */
-        if (BrokerRole.SLAVE != messageStoreConfig.getBrokerRole()) {
-            if (this.transactionalMessageCheckService != null) {
-                log.info("Start transaction service!");
-                this.transactionalMessageCheckService.start();
-            }
-        }
+
     }
 
     public synchronized void registerIncrementBrokerData(TopicConfig topicConfig, DataVersion dataVersion) {
