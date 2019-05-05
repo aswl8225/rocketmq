@@ -65,11 +65,11 @@ import java.util.concurrent.TimeUnit;
 public class CommitLog {
     // Message's MAGIC CODE daa320a7
     public final static int MESSAGE_MAGIC_CODE = -626843481;
-    private static final InternalLogger log = InternalLoggerFactory.getLogger(LoggerName.STORE_LOGGER_NAME);
+    protected  static final InternalLogger log = InternalLoggerFactory.getLogger(LoggerName.STORE_LOGGER_NAME);
     // End of file empty MAGIC CODE cbd43194
-    private final static int BLANK_MAGIC_CODE = -875286124;
-    private final MappedFileQueue mappedFileQueue;
-    private final DefaultMessageStore defaultMessageStore;
+    protected  final static int BLANK_MAGIC_CODE = -875286124;
+    protected  final MappedFileQueue mappedFileQueue;
+    protected  final DefaultMessageStore defaultMessageStore;
     private final FlushCommitLogService flushCommitLogService;
 
     //If TransientStorePool enabled, we must flush message to FileChannel at fixed periods
@@ -82,11 +82,11 @@ public class CommitLog {
      * 若是非事务消息或者commit事务消息，可以通过这个值查找到consumeQueue中数据，QUEUEOFFSET * 20才是偏移地址；
      * 若是PREPARED或者Rollback事务，则可以通过该值从tranStateTable中查找数据
      */
-    private HashMap<String/* topic-queueid */, Long/* offset */> topicQueueTable = new HashMap<String, Long>(1024);
-    private volatile long confirmOffset = -1L;
+    protected  HashMap<String/* topic-queueid */, Long/* offset */> topicQueueTable = new HashMap<String, Long>(1024);
+    protected  volatile long confirmOffset = -1L;
 
     private volatile long beginTimeInLock = 0;
-    private final PutMessageLock putMessageLock;
+    protected  final PutMessageLock putMessageLock;
 
     public CommitLog(final DefaultMessageStore defaultMessageStore) {
         this.mappedFileQueue = new MappedFileQueue(defaultMessageStore.getMessageStoreConfig().getStorePathCommitLog(),
@@ -551,7 +551,7 @@ public class CommitLog {
      * @param propertiesLength
      * @return
      */
-    private static int calMsgLength(int bodyLength, int topicLength, int propertiesLength) {
+    protected static int calMsgLength(int bodyLength, int topicLength, int propertiesLength) {
         final int msgLen = 4 //TOTALSIZE
             + 4 //MAGICCODE
             + 4 //BODYCRC
@@ -666,7 +666,6 @@ public class CommitLog {
                         }
                     }
                 } else {
-                    log.info("recover physics file end, " + mappedFile.getFileName());
                     break;
                 }
             }

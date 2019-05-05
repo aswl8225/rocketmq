@@ -478,8 +478,6 @@ public class BrokerController {
                 }, 1000 * 10, 1000 * 60 * 2, TimeUnit.MILLISECONDS);
             }
 
-
-
             /**
              * tls默认permissive    ?????????????
              */
