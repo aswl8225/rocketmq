@@ -28,11 +28,13 @@ import org.apache.rocketmq.logging.InternalLoggerFactory;
 import org.apache.rocketmq.store.config.BrokerRole;
 import org.apache.rocketmq.store.config.MessageStoreConfig;
 import org.apache.rocketmq.store.config.StorePathConfigHelper;
+import org.apache.rocketmq.store.dledger.DLedgerCommitLog;
 import org.apache.rocketmq.store.ha.HAService;
 import org.apache.rocketmq.store.index.IndexService;
 import org.apache.rocketmq.store.index.QueryOffsetResult;
 import org.apache.rocketmq.store.schedule.ScheduleMessageService;
 import org.apache.rocketmq.store.stats.BrokerStatsManager;
+
 
 import java.io.File;
 import java.io.IOException;
@@ -45,7 +47,6 @@ import java.util.Map.Entry;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicLong;
 
-import static org.apache.rocketmq.store.config.BrokerRole.SLAVE;
 
 public class DefaultMessageStore implements MessageStore {
     private static final InternalLogger log = InternalLoggerFactory.getLogger(LoggerName.STORE_LOGGER_NAME);
@@ -107,7 +108,11 @@ public class DefaultMessageStore implements MessageStore {
         this.brokerStatsManager = brokerStatsManager;
         this.allocateMappedFileService = new AllocateMappedFileService(this);
 
-
+        if (messageStoreConfig.isEnableDLegerCommitLog()) {
+            this.commitLog = new DLedgerCommitLog(this);
+        } else {
+            this.commitLog = new CommitLog(this);
+        }
         this.consumeQueueTable = new ConcurrentHashMap<>(32);
 
         this.flushConsumeQueueService = new FlushConsumeQueueService();
@@ -124,7 +129,11 @@ public class DefaultMessageStore implements MessageStore {
          */
         this.indexService = new IndexService(this);
 
-
+        if (!messageStoreConfig.isEnableDLegerCommitLog()) {
+            this.haService = new HAService(this);
+        } else {
+            this.haService = null;
+        }
 
         this.reputMessageService = new ReputMessageService();
 
@@ -269,25 +278,63 @@ public class DefaultMessageStore implements MessageStore {
          */
         lockFile.getChannel().write(ByteBuffer.wrap("lock".getBytes()));
         lockFile.getChannel().force(true);
+        {
+            /**
+             * 1. Make sure the fast-forward messages to be truncated during the recovering according to the max physical offset of the commitlog;
+             * 2. DLedger committedPos may be missing, so the maxPhysicalPosInLogicQueue maybe bigger that maxOffset returned by DLedgerCommitLog, just let it go;
+             * 3. Calculate the reput offset according to the consume queue;
+             * 4. Make sure the fall-behind messages to be dispatched before starting the commitlog, especially when the broker role are automatically changed.
+             */
+            long maxPhysicalPosInLogicQueue = commitLog.getMinOffset();
+            for (ConcurrentMap<Integer, ConsumeQueue> maps : this.consumeQueueTable.values()) {
+                for (ConsumeQueue logic : maps.values()) {
+                    if (logic.getMaxPhysicOffset() > maxPhysicalPosInLogicQueue) {
+                        maxPhysicalPosInLogicQueue = logic.getMaxPhysicOffset();
+                    }
+                }
+            }
+            if (maxPhysicalPosInLogicQueue < 0) {
+                maxPhysicalPosInLogicQueue = 0;
+            }
+            if (maxPhysicalPosInLogicQueue < this.commitLog.getMinOffset()) {
+                maxPhysicalPosInLogicQueue = this.commitLog.getMinOffset();
+                /**
+                 * This happens in following conditions:
+                 * 1. If someone removes all the consumequeue files or the disk get damaged.
+                 * 2. Launch a new broker, and copy the commitlog from other brokers.
+                 *
+                 * All the conditions has the same in common that the maxPhysicalPosInLogicQueue should be 0.
+                 * If the maxPhysicalPosInLogicQueue is gt 0, there maybe something wrong.
+                 */
+                log.warn("[TooSmallCqOffset] maxPhysicalPosInLogicQueue={} clMinOffset={}", maxPhysicalPosInLogicQueue, this.commitLog.getMinOffset());
+            }
+            log.info("[SetReputOffset] maxPhysicalPosInLogicQueue={} clMinOffset={} clMaxOffset={} clConfirmedOffset={}",
+                maxPhysicalPosInLogicQueue, this.commitLog.getMinOffset(), this.commitLog.getMaxOffset(), this.commitLog.getConfirmOffset());
+            this.reputMessageService.setReputFromOffset(maxPhysicalPosInLogicQueue);
+            this.reputMessageService.start();
 
-        /**
-         * consumerqueue定时刷盘
-         */
+            /**
+             *  1. Finish dispatching the messages fall behind, then to start other services.
+             *  2. DLedger committedPos may be missing, so here just require dispatchBehindBytes <= 0
+             */
+            while (true) {
+                if (dispatchBehindBytes() <= 0) {
+                    break;
+                }
+                Thread.sleep(1000);
+                log.info("Try to finish doing reput the messages fall behind during the starting, reputOffset={} maxOffset={} behind={}", this.reputMessageService.getReputFromOffset(), this.getMaxPhyOffset(), this.dispatchBehindBytes());
+            }
+            this.recoverTopicQueueTable();
+        }
+
+        if (!messageStoreConfig.isEnableDLegerCommitLog()) {
+            this.haService.start();
+            this.handleScheduleMessageService(messageStoreConfig.getBrokerRole());
+        }
+
         this.flushConsumeQueueService.start();
-
-        /**
-         * commitlog  刷盘（分异步或同步）
-         * 如果isTransientStorePoolEnable，执行commit操作   写入FileChannel
-         */
         this.commitLog.start();
-
-        /**
-         * 计算tps?？？？？？
-         */
         this.storeStatsService.start();
-
-
-
 
 
 
@@ -302,6 +349,8 @@ public class DefaultMessageStore implements MessageStore {
         this.addScheduleTask();
         this.shutdown = false;
     }
+
+
 
     public void shutdown() {
         if (!this.shutdown) {
@@ -320,6 +369,9 @@ public class DefaultMessageStore implements MessageStore {
                 this.scheduleMessageService.shutdown();
             }
 
+            if (this.haService != null) {
+                this.haService.shutdown();
+            }
 
             this.storeStatsService.shutdown();
             this.indexService.shutdown();
@@ -1321,6 +1373,7 @@ public class DefaultMessageStore implements MessageStore {
         return false;
     }
 
+    @Override
     public long dispatchBehindBytes() {
         return this.reputMessageService.behind();
     }
@@ -1705,7 +1758,7 @@ public class DefaultMessageStore implements MessageStore {
         return maxPhysicOffset;
     }
 
-    private void recoverTopicQueueTable() {
+    public void recoverTopicQueueTable() {
         HashMap<String/* topic-queueid */, Long/* offset */> table = new HashMap<String, Long>(1024);
 
         /**
@@ -1790,6 +1843,18 @@ public class DefaultMessageStore implements MessageStore {
     @Override
     public BrokerStatsManager getBrokerStatsManager() {
         return brokerStatsManager;
+    }
+
+    @Override
+    public void handleScheduleMessageService(final BrokerRole brokerRole) {
+        if (this.scheduleMessageService != null) {
+            if (brokerRole == BrokerRole.SLAVE) {
+                this.scheduleMessageService.shutdown();
+            } else {
+                this.scheduleMessageService.start();
+            }
+        }
+
     }
 
     public int remainTransientStoreBufferNumbs() {
@@ -2205,9 +2270,12 @@ public class DefaultMessageStore implements MessageStore {
         }
 
         private void doReput() {
-            /**
-             * commitLog得最大offset要大于reputFromOffset
-             */
+
+            if (this.reputFromOffset < DefaultMessageStore.this.commitLog.getMinOffset()) {
+                log.warn("The reputFromOffset={} is smaller than minPyOffset={}, this usually indicate that the dispatch behind too much and the commitlog has expired.",
+                    this.reputFromOffset, DefaultMessageStore.this.commitLog.getMinOffset());
+                this.reputFromOffset = DefaultMessageStore.this.commitLog.getMinOffset();
+            }
             for (boolean doNext = true; this.isCommitLogAvailable() && doNext; ) {
 
                 if (DefaultMessageStore.this.getMessageStoreConfig().isDuplicationEnable()
@@ -2230,7 +2298,7 @@ public class DefaultMessageStore implements MessageStore {
                             DispatchRequest dispatchRequest =
                                 DefaultMessageStore.this.commitLog.checkMessageAndReturnSize(result.getByteBuffer(), false, false);
 
-                           int size = dispatchRequest.getMsgSize();
+                            int size = dispatchRequest.getBufferSize() == -1 ? dispatchRequest.getMsgSize() : dispatchRequest.getBufferSize();
 
                             if (dispatchRequest.isSuccess()) {
                                 if (size > 0) {
@@ -2313,6 +2381,10 @@ public class DefaultMessageStore implements MessageStore {
                                      */
                                     doNext = false;
 
+                                    log.error("[BUG]dispatch message to consume queue error, COMMITLOG OFFSET: {}",
+                                        this.reputFromOffset);
+
+                                    this.reputFromOffset += result.getSize() - readSize;
                                 }
                             }
                         }

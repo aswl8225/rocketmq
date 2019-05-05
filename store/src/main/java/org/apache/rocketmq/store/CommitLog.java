@@ -66,11 +66,12 @@ import java.util.concurrent.TimeUnit;
 public class CommitLog {
     // Message's MAGIC CODE daa320a7
     public final static int MESSAGE_MAGIC_CODE = -626843481;
-    protected  static final InternalLogger log = InternalLoggerFactory.getLogger(LoggerName.STORE_LOGGER_NAME);
+
+    protected static final InternalLogger log = InternalLoggerFactory.getLogger(LoggerName.STORE_LOGGER_NAME);
     // End of file empty MAGIC CODE cbd43194
-    protected  final static int BLANK_MAGIC_CODE = -875286124;
-    protected  final MappedFileQueue mappedFileQueue;
-    protected  final DefaultMessageStore defaultMessageStore;
+    protected final static int BLANK_MAGIC_CODE = -875286124;
+    protected final MappedFileQueue mappedFileQueue;
+    protected final DefaultMessageStore defaultMessageStore;
     private final FlushCommitLogService flushCommitLogService;
 
     //If TransientStorePool enabled, we must flush message to FileChannel at fixed periods
@@ -83,11 +84,12 @@ public class CommitLog {
      * 若是非事务消息或者commit事务消息，可以通过这个值查找到consumeQueue中数据，QUEUEOFFSET * 20才是偏移地址；
      * 若是PREPARED或者Rollback事务，则可以通过该值从tranStateTable中查找数据
      */
-    protected  HashMap<String/* topic-queueid */, Long/* offset */> topicQueueTable = new HashMap<String, Long>(1024);
-    protected  volatile long confirmOffset = -1L;
+
+    protected HashMap<String/* topic-queueid */, Long/* offset */> topicQueueTable = new HashMap<String, Long>(1024);
+    protected volatile long confirmOffset = -1L;
 
     private volatile long beginTimeInLock = 0;
-    protected  final PutMessageLock putMessageLock;
+    protected final PutMessageLock putMessageLock;
 
     public CommitLog(final DefaultMessageStore defaultMessageStore) {
         this.mappedFileQueue = new MappedFileQueue(defaultMessageStore.getMessageStoreConfig().getStorePathCommitLog(),
@@ -318,6 +320,12 @@ public class CommitLog {
                 log.warn("maxPhyOffsetOfConsumeQueue({}) >= processOffset({}), truncate dirty logic files", maxPhyOffsetOfConsumeQueue, processOffset);
                 this.defaultMessageStore.truncateDirtyLogicFiles(processOffset);
             }
+        } else {
+            // Commitlog case files are deleted
+            log.warn("The commitlog files are deleted, and delete the consume queue files");
+            this.mappedFileQueue.setFlushedWhere(0);
+            this.mappedFileQueue.setCommittedWhere(0);
+            this.defaultMessageStore.destroyLogics();
         }
     }
 
@@ -545,13 +553,7 @@ public class CommitLog {
         return new DispatchRequest(-1, false /* success */);
     }
 
-    /**
-     * 计算即将存入commitlog的消息大小
-     * @param bodyLength
-     * @param topicLength
-     * @param propertiesLength
-     * @return
-     */
+
     protected static int calMsgLength(int bodyLength, int topicLength, int propertiesLength) {
         final int msgLen = 4 //TOTALSIZE
             + 4 //MAGICCODE
@@ -582,6 +584,7 @@ public class CommitLog {
         this.confirmOffset = phyOffset;
     }
 
+    @Deprecated
     public void recoverAbnormally(long maxPhyOffsetOfConsumeQueue) {
         // recover by the minimum time stamp
         boolean checkCRCOnRecover = this.defaultMessageStore.getMessageStoreConfig().isCheckCRCOnRecover();
@@ -667,6 +670,7 @@ public class CommitLog {
                         }
                     }
                 } else {
+                    log.info("recover physics file end, " + mappedFile.getFileName() + " pos=" + byteBuffer.position());
                     break;
                 }
             }
@@ -692,6 +696,7 @@ public class CommitLog {
         }
         // Commitlog case files are deleted
         else {
+            log.warn("The commitlog files are deleted, and delete the consume queue files");
             this.mappedFileQueue.setFlushedWhere(0);
             this.mappedFileQueue.setCommittedWhere(0);
             this.defaultMessageStore.destroyLogics();
