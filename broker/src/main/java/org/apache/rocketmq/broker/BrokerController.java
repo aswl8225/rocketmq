@@ -479,7 +479,7 @@ public class BrokerController {
             }
 
             /**
-             * tls默认permissive    ?????????????
+             * tls默认permissive    ???????
              */
             if (TlsSystemConfig.tlsMode != TlsMode.DISABLED) {
                 // Register a listener to reload SslContext

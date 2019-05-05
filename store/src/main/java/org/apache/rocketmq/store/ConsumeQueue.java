@@ -616,6 +616,7 @@ public class ConsumeQueue {
         this.defaultMessageStore.getRunningFlags().makeLogicsQueueError();
     }
 
+
     /**
      *
      * @param offset commitlogoffset

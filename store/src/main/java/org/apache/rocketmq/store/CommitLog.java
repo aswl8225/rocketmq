@@ -59,6 +59,7 @@ import java.util.concurrent.TimeUnit;
  * 19	propertiesLength	         2	属性值大小
  * 20	properties	                 ?   propertiesLength	propertiesLength大小的属性数据
  */
+
 /**
  * Store all metadata downtime for recovery, data protection reliability
  */
