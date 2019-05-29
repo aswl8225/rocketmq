@@ -108,6 +108,9 @@ public class DefaultMessageStore implements MessageStore {
         this.brokerStatsManager = brokerStatsManager;
         this.allocateMappedFileService = new AllocateMappedFileService(this);
 
+        /**
+         * 启动dledger
+         */
         if (messageStoreConfig.isEnableDLegerCommitLog()) {
             this.commitLog = new DLedgerCommitLog(this);
         } else {
@@ -129,6 +132,9 @@ public class DefaultMessageStore implements MessageStore {
          */
         this.indexService = new IndexService(this);
 
+        /**
+         * 启动dledger则不再使用ha同步
+         */
         if (!messageStoreConfig.isEnableDLegerCommitLog()) {
             this.haService = new HAService(this);
         } else {
@@ -140,7 +146,7 @@ public class DefaultMessageStore implements MessageStore {
         this.scheduleMessageService = new ScheduleMessageService(this);
 
         /**
-         * transientStorePool
+         * transientStorePool   使用堆外线程池
          */
         this.transientStorePool = new TransientStorePool(messageStoreConfig);
 

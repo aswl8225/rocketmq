@@ -58,7 +58,7 @@ public class TransientStorePool {
 
             final long address = ((DirectBuffer) byteBuffer).address();
             Pointer pointer = new Pointer(address);
-            //过mlock可以将进程使用的部分或者全部的地址空间锁定在物理内存中，防止其被交换到swap空间。
+            //mlock可以将进程使用的部分或者全部的地址空间锁定在物理内存中，防止其被交换到swap空间。
             //对时间敏感的应用会希望全部使用物理内存，提高数据访问和操作的效率。
             LibC.INSTANCE.mlock(pointer, new NativeLong(fileSize));
 

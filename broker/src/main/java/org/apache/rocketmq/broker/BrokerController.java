@@ -268,7 +268,13 @@ public class BrokerController {
 
                     new DefaultMessageStore(this.messageStoreConfig, this.brokerStatsManager, this.messageArrivingListener,
                         this.brokerConfig);
+                /**
+                 * 启用dledger
+                 */
                 if (messageStoreConfig.isEnableDLegerCommitLog()) {
+                    /**
+                     * dledger角色变化监听
+                     */
                     DLedgerRoleChangeHandler roleChangeHandler = new DLedgerRoleChangeHandler(this, (DefaultMessageStore) messageStore);
                     ((DLedgerCommitLog)((DefaultMessageStore) messageStore).getCommitLog()).getdLedgerServer().getdLedgerLeaderElector().addRoleChangeHandler(roleChangeHandler);
                 }
@@ -698,6 +704,9 @@ public class BrokerController {
         this.brokerStats = brokerStats;
     }
 
+    /**
+     * 设置消费者暂时不可消费   以保护broker
+     */
     public void protectBroker() {
         if (this.brokerConfig.isDisableConsumeIfConsumerReadSlowly()) {
             final Iterator<Map.Entry<String, MomentStatsItem>> it = this.brokerStatsManager.getMomentStatsItemSetFallSize().getStatsItemTable().entrySet().iterator();
@@ -708,6 +717,9 @@ public class BrokerController {
                     final String[] split = next.getValue().getStatsKey().split("@");
                     final String group = split[2];
                     LOG_PROTECTION.info("[PROTECT_BROKER] the consumer[{}] consume slowly, {} bytes, disable it", group, fallBehindBytes);
+                    /**
+                     * 消费者不可消费
+                     */
                     this.subscriptionGroupManager.disableConsume(group);
                 }
             }
