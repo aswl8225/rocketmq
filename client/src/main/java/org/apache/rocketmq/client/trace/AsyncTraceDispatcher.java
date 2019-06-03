@@ -16,6 +16,21 @@
  */
 package org.apache.rocketmq.client.trace;
 
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.UUID;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
+import org.apache.commons.lang3.StringUtils;
+import org.apache.rocketmq.client.AccessChannel;
 import org.apache.rocketmq.client.common.ThreadLocalIndex;
 import org.apache.rocketmq.client.exception.MQClientException;
 import org.apache.rocketmq.client.impl.consumer.DefaultMQPushConsumerImpl;
@@ -34,21 +49,6 @@ import org.apache.rocketmq.common.message.MessageQueue;
 import org.apache.rocketmq.logging.InternalLogger;
 import org.apache.rocketmq.remoting.RPCHook;
 
-import java.io.IOException;
-import java.util.concurrent.ArrayBlockingQueue;
-import java.util.concurrent.ThreadPoolExecutor;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicLong;
-import java.util.UUID;
-import java.util.List;
-import java.util.ArrayList;
-import java.util.Map;
-import java.util.HashMap;
-import java.util.Set;
-import java.util.HashSet;
-
-
 import static org.apache.rocketmq.client.trace.TraceConstants.TRACE_INSTANCE_NAME;
 
 public class AsyncTraceDispatcher implements TraceDispatcher {
@@ -58,7 +58,7 @@ public class AsyncTraceDispatcher implements TraceDispatcher {
     private final int batchSize;
     private final int maxMsgSize;
     private final DefaultMQProducer traceProducer;
-    private final ThreadPoolExecutor traceExecuter;
+    private final ThreadPoolExecutor traceExecutor;
     // The last discard number of log
     private AtomicLong discardCount;
     private Thread worker;
@@ -72,9 +72,9 @@ public class AsyncTraceDispatcher implements TraceDispatcher {
     private String dispatcherId = UUID.randomUUID().toString();
     private String traceTopicName;
     private AtomicBoolean isStarted = new AtomicBoolean(false);
+    private AccessChannel accessChannel = AccessChannel.LOCAL;
 
-
-    public AsyncTraceDispatcher(String traceTopicName, RPCHook rpcHook) throws MQClientException {
+    public AsyncTraceDispatcher(String traceTopicName, RPCHook rpcHook) {
         // queueSize is greater than or equal to the n power of 2 of value
         this.queueSize = 2048;
         this.batchSize = 100;
@@ -90,17 +90,26 @@ public class AsyncTraceDispatcher implements TraceDispatcher {
         } else {
             this.traceTopicName = MixAll.RMQ_SYS_TRACE_TOPIC;
         }
-        this.traceExecuter = new ThreadPoolExecutor(//
-                10, //
-                20, //
-                1000 * 60, //
-                TimeUnit.MILLISECONDS, //
-                this.appenderQueue, //
-                new ThreadFactoryImpl("MQTraceSendThread_"));
+
         /**
          * 消息轨迹的生产者  默认组名为_INNER_TRACE_PRODUCER
          */
+        this.traceExecutor = new ThreadPoolExecutor(//
+            10, //
+            20, //
+            1000 * 60, //
+            TimeUnit.MILLISECONDS, //
+            this.appenderQueue, //
+            new ThreadFactoryImpl("MQTraceSendThread_"));
         traceProducer = getAndCreateTraceProducer(rpcHook);
+    }
+
+    public AccessChannel getAccessChannel() {
+        return accessChannel;
+    }
+
+    public void setAccessChannel(AccessChannel accessChannel) {
+        this.accessChannel = accessChannel;
     }
 
     public String getTraceTopicName() {
@@ -131,12 +140,13 @@ public class AsyncTraceDispatcher implements TraceDispatcher {
         this.hostConsumer = hostConsumer;
     }
 
-    public void start(String nameSrvAddr) throws MQClientException {
+    public void start(String nameSrvAddr, AccessChannel accessChannel) throws MQClientException {
         if (isStarted.compareAndSet(false, true)) {
             traceProducer.setNamesrvAddr(nameSrvAddr);
             traceProducer.setInstanceName(TRACE_INSTANCE_NAME + "_" + nameSrvAddr);
             traceProducer.start();
         }
+        this.accessChannel = accessChannel;
         /**
          * 工作线程实例化并启动   AsyncRunnable
          */
@@ -198,7 +208,7 @@ public class AsyncTraceDispatcher implements TraceDispatcher {
     @Override
     public void shutdown() {
         this.stopped = true;
-        this.traceExecuter.shutdown();
+        this.traceExecutor.shutdown();
         if (isStarted.get()) {
             traceProducer.shutdown();
         }
@@ -263,7 +273,7 @@ public class AsyncTraceDispatcher implements TraceDispatcher {
                  */
                 if (contexts.size() > 0) {
                     AsyncAppenderRequest request = new AsyncAppenderRequest(contexts);
-                    traceExecuter.submit(request);
+                    traceExecutor.submit(request);
                 } else if (AsyncTraceDispatcher.this.stopped) {
                     this.stopped = true;
                 }
@@ -303,8 +313,12 @@ public class AsyncTraceDispatcher implements TraceDispatcher {
                 }
                 // Topic value corresponding to original message entity content
                 String topic = context.getTraceBeans().get(0).getTopic();
+                String regionId = context.getRegionId();
                 // Use  original message entity's topic as key
                 String key = topic;
+                if (!StringUtils.isBlank(regionId)) {
+                    key = key + TraceConstants.CONTENT_SPLITOR + regionId;
+                }
                 List<TraceTransferBean> transBeanList = transBeanMap.get(key);
                 if (transBeanList == null) {
                     transBeanList = new ArrayList<TraceTransferBean>();
@@ -317,17 +331,24 @@ public class AsyncTraceDispatcher implements TraceDispatcher {
                 transBeanList.add(traceData);
             }
             for (Map.Entry<String, List<TraceTransferBean>> entry : transBeanMap.entrySet()) {
+                String[] key = entry.getKey().split(String.valueOf(TraceConstants.CONTENT_SPLITOR));
+                String dataTopic = entry.getKey();
+                String regionId = null;
+                if (key.length > 1) {
+                    dataTopic = key[0];
+                    regionId = key[1];
+                }
                 /**
                  * 发送消息
                  */
-                flushData(entry.getValue());
+                flushData(entry.getValue(), dataTopic, regionId);
             }
         }
 
         /**
          * Batch sending data actually
          */
-        private void flushData(List<TraceTransferBean> transBeanList) {
+        private void flushData(List<TraceTransferBean> transBeanList, String dataTopic, String regionId) {
             if (transBeanList.size() == 0) {
                 return;
             }
@@ -349,7 +370,7 @@ public class AsyncTraceDispatcher implements TraceDispatcher {
                     /**
                      * 发送消息
                      */
-                    sendTraceDataByMQ(keySet, buffer.toString());
+                    sendTraceDataByMQ(keySet, buffer.toString(), dataTopic, regionId);
                     // Clear temporary buffer after finishing
                     /**
                      * 清缓存
@@ -364,7 +385,7 @@ public class AsyncTraceDispatcher implements TraceDispatcher {
              * 有待发送数据  则发送
              */
             if (count > 0) {
-                sendTraceDataByMQ(keySet, buffer.toString());
+                sendTraceDataByMQ(keySet, buffer.toString(), dataTopic, regionId);
             }
             transBeanList.clear();
         }
@@ -373,12 +394,14 @@ public class AsyncTraceDispatcher implements TraceDispatcher {
          * Send message trace data
          *
          * @param keySet the keyset in this batch(including msgId in original message not offsetMsgId)
-         * @param data   the message trace data in this batch
+         * @param data the message trace data in this batch
          */
-        private void sendTraceDataByMQ(Set<String> keySet, final String data) {
-            String topic = traceTopicName;
-            final Message message = new Message(topic, data.getBytes());
-
+        private void sendTraceDataByMQ(Set<String> keySet, final String data, String dataTopic, String regionId) {
+            String traceTopic = traceTopicName;
+            if (AccessChannel.CLOUD == accessChannel) {
+                traceTopic = TraceConstants.TRACE_TOPIC_PREFIX + regionId;
+            }
+            final Message message = new Message(traceTopic, data.getBytes());
             // Keyset of message trace includes msgId of or original message
             message.setKeys(keySet);
             /**
@@ -386,10 +409,11 @@ public class AsyncTraceDispatcher implements TraceDispatcher {
              * Message{topic='RMQ_SYS_TRACE_TOPIC', flag=0, properties={KEYS=1550819829391 1550819829181 1550819829390 C0A8326B1E0018B4AAC26F6D3A900004 C0A8326B1E0018B4AAC26F6D3A3D0000 C0A8326B1E0018B4AAC26F6D3A8E0002, WAIT=true}, body=[80, 117, 98, 1, 49, 53, 53, 48, 56, 49, 57, 56, 50, 57, 51, 49, 48, 1, 68, 101, 102, 97, 117, 108, 116, 82, 101, 103, 105, 111, 110, 1, 116, 114, 97, 99, 101, 77, 101, 115, 115, 97, 103, 101, 80, 114, 111, 100, 117, 99, 101, 114, 1, 109, 101, 115, 115, 97, 103, 101, 84, 114, 97, 99, 101, 1, 67, 48, 65, 56, 51, 50, 54, 66, 49, 69, 48, 48, 49, 56, 66, 52, 65, 65, 67, 50, 54, 70, 54, 68, 51, 65, 51, 68, 48, 48, 48, 48, 1, 84, 97, 103, 65, 1, 49, 53, 53, 48, 56, 49, 57, 56, 50, 57, 49, 56, 49, 1, 49, 57, 50, 46, 49, 54, 56, 46, 53, 48, 46, 49, 48, 55, 58, 49, 48, 57, 48, 57, 1, 49, 49, 1, 55, 57, 1, 48, 1, 67, 48, 65, 56, 51, 50, 54, 66, 48, 48, 48, 48, 50, 65, 57, 70, 48, 48, 48, 48, 48, 48, 48, 48, 48, 51, 49, 57, 48, 55, 53, 67, 1, 116, 114, 117, 101, 2, 80, 117, 98, 1, 49, 53, 53, 48, 56, 49, 57, 56, 50, 57, 51, 57, 48, 1, 68, 101, 102, 97, 117, 108, 116, 82, 101, 103, 105, 111, 110, 1, 116, 114, 97, 99, 101, 77, 101, 115, 115, 97, 103, 101, 80, 114, 111, 100, 117, 99, 101, 114, 1, 109, 101, 115, 115, 97, 103, 101, 84, 114, 97, 99, 101, 1, 67, 48, 65, 56, 51, 50, 54, 66, 49, 69, 48, 48, 49, 56, 66, 52, 65, 65, 67, 50, 54, 70, 54, 68, 51, 65, 56, 69, 48, 48, 48, 50, 1, 84, 97, 103, 65, 1, 49, 53, 53, 48, 56, 49, 57, 56, 50, 57, 51, 57, 48, 1, 49, 57, 50, 46, 49, 54, 56, 46, 53, 48, 46, 49, 48, 55, 58, 49, 48, 57, 48, 57, 1, 49, 49, 1, 49, 1, 48, 1, 67, 48, 65, 56, 51, 50, 54, 66, 48, 48, 48, 48, 50, 65, 57, 70, 48, 48, 48, 48, 48, 48, 48, 48, 48, 51, 49, 57, 48, 56, 49, 70, 1, 116, 114, 117, 101, 2, 80, 117, 98, 1, 49, 53, 53, 48, 56, 49, 57, 56, 50, 57, 51, 57, 50, 1, 68, 101, 102, 97, 117, 108, 116, 82, 101, 103, 105, 111, 110, 1, 116, 114, 97, 99, 101, 77, 101, 115, 115, 97, 103, 101, 80, 114, 111, 100, 117, 99, 101, 114, 1, 109, 101, 115, 115, 97, 103, 101, 84, 114, 97, 99, 101, 1, 67, 48, 65, 56, 51, 50, 54, 66, 49, 69, 48, 48, 49, 56, 66, 52, 65, 65, 67, 50, 54, 70, 54, 68, 51, 65, 57, 48, 48, 48, 48, 52, 1, 84, 97, 103, 65, 1, 49, 53, 53, 48, 56, 49, 57, 56, 50, 57, 51, 57, 49, 1, 49, 57, 50, 46, 49, 54, 56, 46, 53, 48, 46, 49, 48, 55, 58, 49, 48, 57, 48, 57, 1, 49, 49, 1, 50, 1, 48, 1, 67, 48, 65, 56, 51, 50, 54, 66, 48, 48, 48, 48, 50, 65, 57, 70, 48, 48, 48, 48, 48, 48, 48, 48, 48, 51, 49, 57, 48, 56, 69, 50, 1, 116, 114, 117, 101, 2], transactionId='null'}
              */
             try {
-                Set<String> traceBrokerSet = tryGetMessageQueueBrokerSet(traceProducer.getDefaultMQProducerImpl(), topic);
+                Set<String> traceBrokerSet = tryGetMessageQueueBrokerSet(traceProducer.getDefaultMQProducerImpl(), traceTopic);
                 SendCallback callback = new SendCallback() {
                     @Override
                     public void onSuccess(SendResult sendResult) {
+
                     }
 
                     @Override

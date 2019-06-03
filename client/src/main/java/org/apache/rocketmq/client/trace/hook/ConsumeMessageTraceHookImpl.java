@@ -29,6 +29,7 @@ import org.apache.rocketmq.common.message.MessageExt;
 
 import java.util.ArrayList;
 import java.util.List;
+import org.apache.rocketmq.common.protocol.NamespaceUtil;
 
 public class ConsumeMessageTraceHookImpl implements ConsumeMessageHook {
 
@@ -59,11 +60,7 @@ public class ConsumeMessageTraceHookImpl implements ConsumeMessageHook {
         TraceContext traceContext = new TraceContext();
         context.setMqTraceContext(traceContext);
         traceContext.setTraceType(TraceType.SubBefore);//
-        traceContext.setGroupName(context.getConsumerGroup());//
-
-        /**
-         * TraceBean
-         */
+        traceContext.setGroupName(NamespaceUtil.withoutNamespace(context.getConsumerGroup()));//
         List<TraceBean> beans = new ArrayList<TraceBean>();
         for (MessageExt msg : context.getMsgList()) {
             if (msg == null) {
@@ -77,7 +74,7 @@ public class ConsumeMessageTraceHookImpl implements ConsumeMessageHook {
                 continue;
             }
             TraceBean traceBean = new TraceBean();
-            traceBean.setTopic(msg.getTopic());//
+            traceBean.setTopic(NamespaceUtil.withoutNamespace(msg.getTopic()));//
             traceBean.setMsgId(msg.getMsgId());//
             traceBean.setTags(msg.getTags());//
             traceBean.setKeys(msg.getKeys());//
@@ -124,7 +121,7 @@ public class ConsumeMessageTraceHookImpl implements ConsumeMessageHook {
         TraceContext subAfterContext = new TraceContext();
         subAfterContext.setTraceType(TraceType.SubAfter);//
         subAfterContext.setRegionId(subBeforeContext.getRegionId());//
-        subAfterContext.setGroupName(subBeforeContext.getGroupName());//
+        subAfterContext.setGroupName(NamespaceUtil.withoutNamespace(subBeforeContext.getGroupName()));//
         subAfterContext.setRequestId(subBeforeContext.getRequestId());//
         subAfterContext.setSuccess(context.isSuccess());//
 
