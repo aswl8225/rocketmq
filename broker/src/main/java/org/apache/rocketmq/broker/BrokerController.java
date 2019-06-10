@@ -273,7 +273,7 @@ public class BrokerController {
                  */
                 if (messageStoreConfig.isEnableDLegerCommitLog()) {
                     /**
-                     * dledger角色变化监听
+                     * dledger角色变化监听   通知
                      */
                     DLedgerRoleChangeHandler roleChangeHandler = new DLedgerRoleChangeHandler(this, (DefaultMessageStore) messageStore);
                     ((DLedgerCommitLog)((DefaultMessageStore) messageStore).getCommitLog()).getdLedgerServer().getdLedgerLeaderElector().addRoleChangeHandler(roleChangeHandler);
@@ -1286,7 +1286,10 @@ public class BrokerController {
     }
 
 
-
+    /**
+     *
+     * @param role
+     */
     private void handleSlaveSynchronize(BrokerRole role) {
         if (role == BrokerRole.SLAVE) {
             if (null != slaveSyncFuture) {
@@ -1313,15 +1316,25 @@ public class BrokerController {
         }
     }
 
+    /**
+     * 角色变更为Slave
+     * @param brokerId
+     */
     public void changeToSlave(int brokerId) {
         log.info("Begin to change to slave brokerName={} brokerId={}", brokerConfig.getBrokerName(), brokerId);
 
         //change the role
+        /**
+         * 变更角色
+         */
         brokerConfig.setBrokerId(brokerId == 0 ? 1 : brokerId); //TO DO check
         messageStoreConfig.setBrokerRole(BrokerRole.SLAVE);
 
         //handle the scheduled service
         try {
+            /**
+             * 关闭scheduleMessageService
+             */
             this.messageStore.handleScheduleMessageService(BrokerRole.SLAVE);
         } catch (Throwable t) {
             log.error("[MONITOR] handleScheduleMessageService failed when changing to slave", t);
@@ -1329,6 +1342,9 @@ public class BrokerController {
 
         //handle the transactional service
         try {
+            /**
+             * 关闭transactionalMessageCheckService
+             */
             this.shutdownProcessorByHa();
         } catch (Throwable t) {
             log.error("[MONITOR] shutdownProcessorByHa failed when changing to slave", t);
@@ -1390,6 +1406,9 @@ public class BrokerController {
         }
     }
 
+    /**
+     * 关闭transactionalMessageCheckService
+     */
     private void shutdownProcessorByHa() {
         if (this.transactionalMessageCheckService != null) {
             this.transactionalMessageCheckService.shutdown(true);

@@ -1851,6 +1851,10 @@ public class DefaultMessageStore implements MessageStore {
         return brokerStatsManager;
     }
 
+    /**
+     * 处理调度服务  角色为slave则关闭
+     * @param brokerRole
+     */
     @Override
     public void handleScheduleMessageService(final BrokerRole brokerRole) {
         if (this.scheduleMessageService != null) {

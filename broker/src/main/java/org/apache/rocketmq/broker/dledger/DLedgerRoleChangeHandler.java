@@ -46,6 +46,11 @@ public class DLedgerRoleChangeHandler implements DLedgerLeaderElector.RoleChange
         this.dLegerServer = dLedgerCommitLog.getdLedgerServer();
     }
 
+    /**
+     * dledger的角色变化时    通知rocketmq
+     * @param term
+     * @param role
+     */
     @Override public void handle(long term, MemberState.Role role) {
         Runnable runnable = new Runnable() {
             @Override public void run() {
@@ -54,14 +59,28 @@ public class DLedgerRoleChangeHandler implements DLedgerLeaderElector.RoleChange
                     boolean succ = true;
                     log.info("Begin handling broker role change term={} role={} currStoreRole={}", term, role, messageStore.getMessageStoreConfig().getBrokerRole());
                     switch (role) {
+                        /**
+                         * 变更为CANDIDATE
+                         */
                         case CANDIDATE:
+                            /**
+                             * 当前broker的角色非SLAVE   则执行changeToSlave
+                             * 即当前broker之前为leader（master）时，变更为CANDIDATE，需要执行changeToSlave
+                             * 如果之前为follower，则变更为CANDIDATE，仍然为slave，不需要执行changeToSlave
+                             */
                             if (messageStore.getMessageStoreConfig().getBrokerRole() != BrokerRole.SLAVE) {
                                 brokerController.changeToSlave(dLedgerCommitLog.getId());
                             }
                             break;
+                        /**
+                         * 变更为FOLLOWER
+                         */
                         case FOLLOWER:
                             brokerController.changeToSlave(dLedgerCommitLog.getId());
                             break;
+                        /**
+                         * 变更为LEADER
+                         */
                         case LEADER:
                             while (true) {
                                 if (!dLegerServer.getMemberState().isLeader()) {
