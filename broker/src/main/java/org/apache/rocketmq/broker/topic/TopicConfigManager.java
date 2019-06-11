@@ -401,11 +401,19 @@ public class TopicConfigManager extends ConfigManager {
         this.persist();
     }
 
+    /**
+     * 更新顺序消费topic配置
+     * @param orderKVTableFromNs
+     */
     public void updateOrderTopicConfig(final KVTable orderKVTableFromNs) {
 
         if (orderKVTableFromNs != null && orderKVTableFromNs.getTable() != null) {
             boolean isChange = false;
             Set<String> orderTopics = orderKVTableFromNs.getTable().keySet();
+
+            /**
+             * orderTopics与本地topicConfigTable都存在的   则设置本地的topic为顺序消费
+             */
             for (String topic : orderTopics) {
                 TopicConfig topicConfig = this.topicConfigTable.get(topic);
                 if (topicConfig != null && !topicConfig.isOrder()) {
@@ -415,6 +423,9 @@ public class TopicConfigManager extends ConfigManager {
                 }
             }
 
+            /**
+             * orderTopics不存在但是本地topicConfigTable存在的的   则设置本地的topic为顺普通消费
+             */
             for (Map.Entry<String, TopicConfig> entry : this.topicConfigTable.entrySet()) {
                 String topic = entry.getKey();
                 if (!orderTopics.contains(topic)) {
@@ -427,6 +438,9 @@ public class TopicConfigManager extends ConfigManager {
                 }
             }
 
+            /**
+             * 更新dataVersion并持久化
+             */
             if (isChange) {
                 this.dataVersion.nextVersion();
                 this.persist();

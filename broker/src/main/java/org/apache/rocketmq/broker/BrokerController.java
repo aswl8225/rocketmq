@@ -1107,17 +1107,26 @@ public class BrokerController {
 
 
         /**
-         * ha？？？？？？？？？？？？？
+         * 更新master地址
          */
         if (registerBrokerResultList.size() > 0) {
             RegisterBrokerResult registerBrokerResult = registerBrokerResultList.get(0);
             if (registerBrokerResult != null) {
                 if (this.updateMasterHAServerAddrPeriodically && registerBrokerResult.getHaServerAddr() != null) {
+                    /**
+                     * 更新master地址
+                     */
                     this.messageStore.updateHaMasterAddress(registerBrokerResult.getHaServerAddr());
                 }
 
+                /**
+                 * 更新master地址
+                 */
                 this.slaveSynchronize.setMasterAddr(registerBrokerResult.getMasterAddr());
 
+                /**
+                 * 更新顺序消费topic配置
+                 */
                 if (checkOrderConfig) {
                     this.getTopicConfigManager().updateOrderTopicConfig(registerBrokerResult.getKvTable());
                 }
@@ -1287,7 +1296,7 @@ public class BrokerController {
 
 
     /**
-     *
+     * slave与master间同步数据
      * @param role
      */
     private void handleSlaveSynchronize(BrokerRole role) {
@@ -1300,6 +1309,9 @@ public class BrokerController {
                 @Override
                 public void run() {
                     try {
+                        /**
+                         * slave从master同步数据
+                         */
                         BrokerController.this.slaveSynchronize.syncAll();
                     }
                     catch (Throwable e) {
@@ -1351,9 +1363,15 @@ public class BrokerController {
         }
 
         //handle the slave synchronise
+        /**
+         * 从master同步信息
+         */
         handleSlaveSynchronize(BrokerRole.SLAVE);
 
         try {
+            /**
+             * 否需要通知nameserver  broker的topic发生变化
+             */
             this.registerBrokerAll(true, true, brokerConfig.isForceRegister());
         } catch (Throwable ignored) {
 
@@ -1398,6 +1416,10 @@ public class BrokerController {
         log.info("Finish to change to master brokerName={}", brokerConfig.getBrokerName());
     }
 
+    /**
+     * 启动transactionalMessageCheckService
+     * @param role
+     */
     private void startProcessorByHa(BrokerRole role) {
         if (BrokerRole.SLAVE != role) {
             if (this.transactionalMessageCheckService != null) {

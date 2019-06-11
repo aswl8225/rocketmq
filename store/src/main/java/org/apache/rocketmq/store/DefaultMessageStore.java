@@ -1379,6 +1379,10 @@ public class DefaultMessageStore implements MessageStore {
         return false;
     }
 
+    /**
+     * 储的数据的最大offset与当前reput数据的差值
+     * @return
+     */
     @Override
     public long dispatchBehindBytes() {
         return this.reputMessageService.behind();
@@ -2267,6 +2271,10 @@ public class DefaultMessageStore implements MessageStore {
             super.shutdown();
         }
 
+        /**
+         * 存储的数据的最大offset与当前reput数据的差值
+         * @return
+         */
         public long behind() {
             return DefaultMessageStore.this.commitLog.getMaxOffset() - this.reputFromOffset;
         }

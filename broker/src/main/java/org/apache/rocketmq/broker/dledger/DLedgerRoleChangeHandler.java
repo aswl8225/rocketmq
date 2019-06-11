@@ -66,7 +66,7 @@ public class DLedgerRoleChangeHandler implements DLedgerLeaderElector.RoleChange
                             /**
                              * 当前broker的角色非SLAVE   则执行changeToSlave
                              * 即当前broker之前为leader（master）时，变更为CANDIDATE，需要执行changeToSlave
-                             * 如果之前为follower，则变更为CANDIDATE，仍然为slave，不需要执行changeToSlave
+                             * 如果之前为follower，则变更为CANDIDATE，仍然为slave，所以不需要执行changeToSlave
                              */
                             if (messageStore.getMessageStoreConfig().getBrokerRole() != BrokerRole.SLAVE) {
                                 brokerController.changeToSlave(dLedgerCommitLog.getId());
@@ -83,13 +83,22 @@ public class DLedgerRoleChangeHandler implements DLedgerLeaderElector.RoleChange
                          */
                         case LEADER:
                             while (true) {
+                                /**
+                                 * 非leader
+                                 */
                                 if (!dLegerServer.getMemberState().isLeader()) {
                                     succ = false;
                                     break;
                                 }
+                                /**
+                                 * 没有保存数据时
+                                 */
                                 if (dLegerServer.getdLedgerStore().getLedgerEndIndex() == -1) {
                                     break;
                                 }
+                                /**
+                                 * leader的所有数据已经同步给follower   且所有数据已经reput
+                                 */
                                 if (dLegerServer.getdLedgerStore().getLedgerEndIndex() == dLegerServer.getdLedgerStore().getCommittedIndex()
                                     && messageStore.dispatchBehindBytes() == 0) {
                                     break;
