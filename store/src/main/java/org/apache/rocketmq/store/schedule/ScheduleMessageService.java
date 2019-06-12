@@ -144,7 +144,47 @@ public class ScheduleMessageService extends ConfigManager {
      * 定时持久化到store/config/delayOffset.json
      */
     public void start() {
+        if (started.compareAndSet(false, true)) {
+            this.timer = new Timer("ScheduleMessageTimerThread", true);
+            /**
+             * delayLevelTable
+             * 1s 5s 10s 30s 1m 2m 3m 4m 5m 6m 7m 8m 9m 10m 20m 30m 1h 2h
+             */
+            for (Map.Entry<Integer, Long> entry : this.delayLevelTable.entrySet()) {
+                Integer level = entry.getKey();
+                Long timeDelay = entry.getValue();
+                /**
+                 * delayOffset.json内容
+                 */
+                Long offset = this.offsetTable.get(level);
+                if (null == offset) {
+                    offset = 0L;
+                }
 
+                /**
+                 * 对SCHEDULE_TOPIC_XXXX进行延迟投递
+                 * 延迟1秒
+                 */
+                if (timeDelay != null) {
+                    this.timer.schedule(new DeliverDelayedMessageTimerTask(level, offset), FIRST_DELAY_TIME);
+                }
+            }
+
+            this.timer.scheduleAtFixedRate(new TimerTask() {
+
+                @Override
+                public void run() {
+                    try {
+                        /**
+                         * 持久化
+                         */
+                        if (started.get()) ScheduleMessageService.this.persist();
+                    } catch (Throwable e) {
+                        log.error("scheduleAtFixedRate flush exception", e);
+                    }
+                }
+            }, 10000, this.defaultMessageStore.getMessageStoreConfig().getFlushDelayOffsetInterval());
+        }
     }
     public void shutdown() {
         if (this.started.compareAndSet(true, false)) {

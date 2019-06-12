@@ -147,6 +147,9 @@ public class DLedgerCommitLog extends CommitLog {
 
     @Override
     public long getMinOffset() {
+        /**
+         * 获取第一个commitlog对应的起始offset
+         */
         if (!mappedFileQueue.getMappedFiles().isEmpty()) {
             return mappedFileQueue.getMinOffset();
         }

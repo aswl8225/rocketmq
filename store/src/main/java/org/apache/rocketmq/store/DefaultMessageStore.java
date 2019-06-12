@@ -1863,8 +1863,14 @@ public class DefaultMessageStore implements MessageStore {
     public void handleScheduleMessageService(final BrokerRole brokerRole) {
         if (this.scheduleMessageService != null) {
             if (brokerRole == BrokerRole.SLAVE) {
+                /**
+                 * slave  关闭延迟投递服务
+                 */
                 this.scheduleMessageService.shutdown();
             } else {
+                /**
+                 * master  开启延迟投递服务
+                 */
                 this.scheduleMessageService.start();
             }
         }

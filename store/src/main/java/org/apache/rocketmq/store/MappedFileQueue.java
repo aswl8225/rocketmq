@@ -389,6 +389,10 @@ public class MappedFileQueue {
         return true;
     }
 
+    /**
+     * 获取第一个commitlog对应的起始offset
+     * @return
+     */
     public long getMinOffset() {
 
         if (!this.mappedFiles.isEmpty()) {

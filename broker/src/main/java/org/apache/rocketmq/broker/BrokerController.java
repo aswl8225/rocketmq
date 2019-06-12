@@ -1300,6 +1300,9 @@ public class BrokerController {
      * @param role
      */
     private void handleSlaveSynchronize(BrokerRole role) {
+        /**
+         * 角色为slave
+         */
         if (role == BrokerRole.SLAVE) {
             if (null != slaveSyncFuture) {
                 slaveSyncFuture.cancel(false);
@@ -1320,6 +1323,9 @@ public class BrokerController {
                 }
             }, 1000 * 3, 1000 * 10, TimeUnit.MILLISECONDS);
         } else {
+            /**
+             * 角色为master
+             */
             //handle the slave synchronise
             if (null != slaveSyncFuture) {
                 slaveSyncFuture.cancel(false);
@@ -1380,7 +1386,10 @@ public class BrokerController {
     }
 
 
-
+    /**
+     * 角色变更为master
+     * @param role
+     */
     public void changeToMaster(BrokerRole role) {
         if (role == BrokerRole.SLAVE) {
             return;
@@ -1388,10 +1397,16 @@ public class BrokerController {
         log.info("Begin to change to master brokerName={}", brokerConfig.getBrokerName());
 
         //handle the slave synchronise
+        /**
+         * slave与master间同步数据
+         */
         handleSlaveSynchronize(role);
 
         //handle the scheduled service
         try {
+            /**
+             * 处理延迟投递服务
+             */
             this.messageStore.handleScheduleMessageService(role);
         } catch (Throwable t) {
             log.error("[MONITOR] handleScheduleMessageService failed when changing to master", t);
@@ -1399,6 +1414,9 @@ public class BrokerController {
 
         //handle the transactional service
         try {
+            /**
+             * 启动事务检查服务
+             */
             this.startProcessorByHa(BrokerRole.SYNC_MASTER);
         } catch (Throwable t) {
             log.error("[MONITOR] startProcessorByHa failed when changing to master", t);
@@ -1409,6 +1427,9 @@ public class BrokerController {
         messageStoreConfig.setBrokerRole(role);
 
         try {
+            /**
+             * 是否需要通知nameserver  broker的topic发生变化
+             */
             this.registerBrokerAll(true, true, brokerConfig.isForceRegister());
         } catch (Throwable ignored) {
 
