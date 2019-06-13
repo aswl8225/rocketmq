@@ -459,7 +459,7 @@ public class BrokerController {
                 public void run() {
                     try {
                         /**
-                         * ???????????????????
+                         * 存储的数据的最大offset与当前reput数据的差值
                          */
                         log.info("dispatch behind commit log {} bytes", BrokerController.this.getMessageStore().dispatchBehindBytes());
                     } catch (Throwable e) {
@@ -976,8 +976,17 @@ public class BrokerController {
             this.filterServerManager.start();
         }
 
+        /**
+         * 非dledger时      dledger时   根据选举结果来判断
+         */
         if (!messageStoreConfig.isEnableDLegerCommitLog()) {
+            /**
+             * 启动transactionalMessageCheckService
+             */
             startProcessorByHa(messageStoreConfig.getBrokerRole());
+            /**
+             * slave与master间同步数据
+             */
             handleSlaveSynchronize(messageStoreConfig.getBrokerRole());
         }
 

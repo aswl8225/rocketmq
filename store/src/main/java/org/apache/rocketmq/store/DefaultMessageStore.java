@@ -1380,7 +1380,7 @@ public class DefaultMessageStore implements MessageStore {
     }
 
     /**
-     * 储的数据的最大offset与当前reput数据的差值
+     * 存储的数据的最大offset与当前reput数据的差值
      * @return
      */
     @Override
