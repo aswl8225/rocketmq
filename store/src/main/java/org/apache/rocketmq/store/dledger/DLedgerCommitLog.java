@@ -145,6 +145,10 @@ public class DLedgerCommitLog extends CommitLog {
         return 0;
     }
 
+    /**
+     * 获取commitlog最小且有效得offset
+     * @return
+     */
     @Override
     public long getMinOffset() {
         /**
