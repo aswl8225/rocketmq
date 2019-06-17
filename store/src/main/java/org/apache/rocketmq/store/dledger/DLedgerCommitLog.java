@@ -164,6 +164,10 @@ public class DLedgerCommitLog extends CommitLog {
         return dLedgerFileList.getMinOffset();
     }
 
+    /**
+     * dledger下   最大的offset就是ConfirmOffset
+     * @return
+     */
     @Override
     public long getConfirmOffset() {
         return this.getMaxOffset();
@@ -240,27 +244,55 @@ public class DLedgerCommitLog extends CommitLog {
         }
     }
 
+    /**
+     * 获取offset处为起始位置的所有消息
+     * @param offset
+     * @return
+     */
     @Override
     public SelectMappedBufferResult getData(final long offset) {
         if (offset < dividedCommitlogOffset) {
+            /**
+             * commitlog模式
+             */
             return super.getData(offset);
         }
+        /**
+         * dledgercommitlog模式
+         */
         return this.getData(offset, offset == 0);
     }
 
-
+    /**
+     * 获取offset处为起始位置的所有消息
+     * @param offset
+     * @param returnFirstOnNotFound
+     * @return
+     */
     @Override
     public SelectMappedBufferResult getData(final long offset, final boolean returnFirstOnNotFound) {
         if (offset < dividedCommitlogOffset) {
+            /**
+             * commitlog模式
+             */
             return super.getData(offset, returnFirstOnNotFound);
         }
         if (offset >= dLedgerFileStore.getCommittedPos()) {
             return null;
         }
+        /**
+         * 默认1g
+         */
         int mappedFileSize = this.dLedgerServer.getdLedgerConfig().getMappedFileSizeForEntryData();
+        /**
+         * 获取offset对应的dledger文件
+         */
         MmapFile mappedFile = this.dLedgerFileList.findMappedFileByOffset(offset, returnFirstOnNotFound);
         if (mappedFile != null) {
             int pos = (int) (offset % mappedFileSize);
+            /**
+             * 获取mappedFile文件   从pos位置开始的所有消息  是wrotePosition而不是
+             */
             SelectMmapBufferResult sbr = mappedFile.selectMappedBuffer(pos);
             return  convertSbr(truncate(sbr));
         }
