@@ -291,10 +291,21 @@ public class DefaultMessageStore implements MessageStore {
              * 3. Calculate the reput offset according to the consume queue;
              * 4. Make sure the fall-behind messages to be dispatched before starting the commitlog, especially when the broker role are automatically changed.
              */
+
+            /**
+             * 1。确保在恢复过程中根据commitlog的最大物理偏移量截断快进消息；
+             * 2。dledger committedpos可能丢失，所以maxPhysicalPosInLogicQueue可能比dledgercommitlog返回的maxoffset大，就让它走吧；
+             * 3。根据consumeQueue计算出reputOffset；
+             * 4。在启动commitlog之前，确保要dispatched的消息相对得落后，特别是当代理角色被自动更改时。
+             */
+
             /**
              *获取commitlog最小且有效得offset
              */
             long maxPhysicalPosInLogicQueue = commitLog.getMinOffset();
+            /**
+             * 遍历所有得consumeQueue   选取其中对应得最大得PhysicOffset  赋值给maxPhysicalPosInLogicQueue
+             */
             for (ConcurrentMap<Integer, ConsumeQueue> maps : this.consumeQueueTable.values()) {
                 for (ConsumeQueue logic : maps.values()) {
                     if (logic.getMaxPhysicOffset() > maxPhysicalPosInLogicQueue) {
@@ -333,6 +344,9 @@ public class DefaultMessageStore implements MessageStore {
                 Thread.sleep(1000);
                 log.info("Try to finish doing reput the messages fall behind during the starting, reputOffset={} maxOffset={} behind={}", this.reputMessageService.getReputFromOffset(), this.getMaxPhyOffset(), this.dispatchBehindBytes());
             }
+            /**
+             * 恢复TopicQueueTable
+             */
             this.recoverTopicQueueTable();
         }
 
@@ -2414,6 +2428,14 @@ public class DefaultMessageStore implements MessageStore {
                                         DefaultMessageStore.this.brokerConfig.getBrokerId() == MixAll.MASTER_ID) {
                                         log.error("[BUG]dispatch message to consume queue error, COMMITLOG OFFSET: {}",
                                             this.reputFromOffset);
+                                        /**
+                                         * 将剩余未读的消息也记入reputFromOffset中  即达到这一批最大的offset
+                                         * reputFromOffset    result.getSize()     readsize      size
+                                         *     10                  1000                0                   初始
+                                         *     110                 1000               100         100      1st
+                                         *     160                 1000               150          50      2nd
+                                         * 160+1000-150=1010       1000                                    3rd   本次进入当前判断
+                                         */
                                         this.reputFromOffset += result.getSize() - readSize;
                                     }
                                 }

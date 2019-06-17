@@ -134,6 +134,10 @@ public class DLedgerCommitLog extends CommitLog {
         return dLedgerFileList.getFlushedWhere();
     }
 
+    /**
+     * 获得最大得offset
+     * @return
+     */
     @Override
     public long getMaxOffset() {
         if (dLedgerFileStore.getCommittedPos() > 0) {
