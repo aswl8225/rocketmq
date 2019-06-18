@@ -512,6 +512,10 @@ public class ConsumeQueue {
                         long tagsCode = result.getByteBuffer().getLong();//tags对应的hash
 
                         if (offsetPy >= phyMinOffset) {
+                            /**
+                             * 设置queue对应的minLogicOffset
+                             * 大于minPhyOffset且最小的一个
+                             */
                             this.minLogicOffset = mappedFile.getFileFromOffset() + i;
                             log.info("Compute logical min offset: {}, topic: {}, queueId: {}",
                                 this.getMinOffsetInQueue(), this.topic, this.queueId);
@@ -618,7 +622,9 @@ public class ConsumeQueue {
     private boolean putMessagePositionInfo(final long offset, final int size, final long tagsCode,
         final long cqOffset) {
 
-
+        /**
+         * consumequeue已处理过当前offset
+         */
         if (offset + size <= this.maxPhysicOffset) {
             log.warn("Maybe try to build consume queue repeatedly maxPhysicOffset={} phyOffset={}", maxPhysicOffset, offset);
             return true;
@@ -652,7 +658,7 @@ public class ConsumeQueue {
         if (mappedFile != null) {
 
             /**
-             * 文件未写入  且不是第一个consumequeue文件
+             * 第一个consumequeue文件&&写入的位置不是0&&文件之前没有写入数据
              */
             if (mappedFile.isFirstCreateInQueue() && cqOffset != 0 && mappedFile.getWrotePosition() == 0) {
                 this.minLogicOffset = expectLogicOffset;
@@ -669,7 +675,7 @@ public class ConsumeQueue {
 
             if (cqOffset != 0) {
                 /**
-                 * mappedFile目前可写入得offset
+                 * mappedFile下一条写入数据对应的offset
                  */
                 long currentLogicOffset = mappedFile.getWrotePosition() + mappedFile.getFileFromOffset();
 
@@ -702,7 +708,13 @@ public class ConsumeQueue {
                 }
             }
 
+            /**
+             * 当前consumequeue存储得最大commitlog对应得offset
+             */
             this.maxPhysicOffset = offset + size;
+            /**
+             * 将byteBufferIndex写入filechannel
+             */
             return mappedFile.appendMessage(this.byteBufferIndex.array());
         }
         return false;

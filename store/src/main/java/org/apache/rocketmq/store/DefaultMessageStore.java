@@ -2339,6 +2339,11 @@ public class DefaultMessageStore implements MessageStore {
                             DispatchRequest dispatchRequest =
                                 DefaultMessageStore.this.commitLog.checkMessageAndReturnSize(result.getByteBuffer(), false, false);
 
+                            /**
+                             * dledger模式    dispatchRequest.getBufferSize() 不等于 -1
+                             * commitlog  对应的MsgSize
+                             * dledger    对应的BufferSize
+                             */
                             int size = dispatchRequest.getBufferSize() == -1 ? dispatchRequest.getMsgSize() : dispatchRequest.getBufferSize();
 
                             if (dispatchRequest.isSuccess()) {
@@ -2430,7 +2435,7 @@ public class DefaultMessageStore implements MessageStore {
                                             this.reputFromOffset);
                                         /**
                                          * 将剩余未读的消息也记入reputFromOffset中  即达到这一批最大的offset
-                                         * reputFromOffset    result.getSize()     readsize      size
+                                         * reputFromOffset    result.getSize()     readsize     消息size
                                          *     10                  1000                0                   初始
                                          *     110                 1000               100         100      1st
                                          *     160                 1000               150          50      2nd
