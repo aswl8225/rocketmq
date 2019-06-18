@@ -272,6 +272,7 @@ public class IndexService {
             String keys = msg.getKeys();
             /**
              * msg对应得offset小于indexFile已经写入得最后一个消息得offset
+             * 即CommitLogOffset处已经有数据写入
              */
             if (msg.getCommitLogOffset() < endPhyOffset) {
                 return;
