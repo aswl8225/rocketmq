@@ -331,6 +331,9 @@ public class DefaultMessageStore implements MessageStore {
             log.info("[SetReputOffset] maxPhysicalPosInLogicQueue={} clMinOffset={} clMaxOffset={} clConfirmedOffset={}",
                 maxPhysicalPosInLogicQueue, this.commitLog.getMinOffset(), this.commitLog.getMaxOffset(), this.commitLog.getConfirmOffset());
             this.reputMessageService.setReputFromOffset(maxPhysicalPosInLogicQueue);
+            /**
+             * reput
+             */
             this.reputMessageService.start();
 
             /**
@@ -355,11 +358,15 @@ public class DefaultMessageStore implements MessageStore {
             this.handleScheduleMessageService(messageStoreConfig.getBrokerRole());
         }
 
+        /**
+         * ConsumeQueue刷盘
+         */
         this.flushConsumeQueueService.start();
+        /**
+         * 如果是commitlog模式  刷盘（分异步或同步）  如果isTransientStorePoolEnable，执行commit操作   写入FileChannel
+         */
         this.commitLog.start();
         this.storeStatsService.start();
-
-
 
         /**
          * 创建abort文件   如果正常退出则会删除该文件
