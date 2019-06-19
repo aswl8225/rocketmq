@@ -443,6 +443,11 @@ public class DLedgerCommitLog extends CommitLog {
         return beginTimeInDledgerLock;
     }
 
+    /**
+     * 消息存储
+     * @param msg
+     * @return
+     */
     @Override
     public PutMessageResult putMessage(final MessageExtBrokerInner msg) {
         // Set the storage time
@@ -458,22 +463,40 @@ public class DLedgerCommitLog extends CommitLog {
 
         //should be consistent with the old version
         final int tranType = MessageSysFlag.getTransactionValue(msg.getSysFlag());
+        /**
+         * 非事务消息或事务提交
+         */
         if (tranType == MessageSysFlag.TRANSACTION_NOT_TYPE
                 || tranType == MessageSysFlag.TRANSACTION_COMMIT_TYPE) {
             // Delay Delivery
+            /**
+             * 延迟投递   重试的消息需要先进入延迟队列   等待延迟时间到达后   再进入重试队列
+             */
             if (msg.getDelayTimeLevel() > 0) {
                 if (msg.getDelayTimeLevel() > this.defaultMessageStore.getScheduleMessageService().getMaxDelayLevel()) {
                     msg.setDelayTimeLevel(this.defaultMessageStore.getScheduleMessageService().getMaxDelayLevel());
                 }
 
+                /**
+                 * 发送到延迟队列
+                 */
                 topic = ScheduleMessageService.SCHEDULE_TOPIC;
+                /**
+                 * 对应的延迟队列的queueid  delayLevel-1
+                 */
                 queueId = ScheduleMessageService.delayLevel2QueueId(msg.getDelayTimeLevel());
 
                 // Backup real topic, queueId
+                /**
+                 * 在属性中存储真正的topic和queueuid
+                 */
                 MessageAccessor.putProperty(msg, MessageConst.PROPERTY_REAL_TOPIC, msg.getTopic());
                 MessageAccessor.putProperty(msg, MessageConst.PROPERTY_REAL_QUEUE_ID, String.valueOf(msg.getQueueId()));
                 msg.setPropertiesString(MessageDecoder.messageProperties2String(msg.getProperties()));
 
+                /**
+                 * 更换topic和queueuid
+                 */
                 msg.setTopic(topic);
                 msg.setQueueId(queueId);
             }
@@ -489,6 +512,9 @@ public class DLedgerCommitLog extends CommitLog {
         long queueOffset;
         try {
             beginTimeInDledgerLock = this.defaultMessageStore.getSystemClock().now();
+            /**
+             * 序列化msg
+             */
             encodeResult = this.messageSerializer.serialize(msg);
             queueOffset = topicQueueTable.get(encodeResult.queueOffsetKey);
             if (encodeResult.status != AppendMessageStatus.PUT_OK) {
@@ -498,6 +524,9 @@ public class DLedgerCommitLog extends CommitLog {
             request.setGroup(dLedgerConfig.getGroup());
             request.setRemoteId(dLedgerServer.getMemberState().getSelfId());
             request.setBody(encodeResult.data);
+            /**
+             *
+             */
             dledgerFuture = (AppendFuture<AppendEntryResponse>) dLedgerServer.handleAppend(request);
             if (dledgerFuture.getPos() == -1) {
                 return new PutMessageResult(PutMessageStatus.OS_PAGECACHE_BUSY, new AppendMessageResult(AppendMessageStatus.UNKNOWN_ERROR));
@@ -678,6 +707,11 @@ public class DLedgerCommitLog extends CommitLog {
             return msgStoreItemMemory;
         }
 
+        /**
+         * 序列化
+         * @param msgInner
+         * @return
+         */
         public EncodeResult serialize(final MessageExtBrokerInner msgInner) {
             // STORETIMESTAMP + STOREHOSTADDRESS + OFFSET <br>
 
