@@ -516,6 +516,10 @@ public class DLedgerCommitLog extends CommitLog {
              * 序列化msg
              */
             encodeResult = this.messageSerializer.serialize(msg);
+
+            /**
+             * 获取queueOffset
+             */
             queueOffset = topicQueueTable.get(encodeResult.queueOffsetKey);
             if (encodeResult.status != AppendMessageStatus.PUT_OK) {
                 return new PutMessageResult(PutMessageStatus.MESSAGE_ILLEGAL, new AppendMessageResult(encodeResult.status));
@@ -524,8 +528,9 @@ public class DLedgerCommitLog extends CommitLog {
             request.setGroup(dLedgerConfig.getGroup());
             request.setRemoteId(dLedgerServer.getMemberState().getSelfId());
             request.setBody(encodeResult.data);
+
             /**
-             *
+             * dledger   append消息
              */
             dledgerFuture = (AppendFuture<AppendEntryResponse>) dLedgerServer.handleAppend(request);
             if (dledgerFuture.getPos() == -1) {
@@ -716,8 +721,14 @@ public class DLedgerCommitLog extends CommitLog {
             // STORETIMESTAMP + STOREHOSTADDRESS + OFFSET <br>
 
             // PHY OFFSET
+            /**
+             * 暂时为0   dledger存储时  再修改真正的offset
+             */
             long wroteOffset = 0;
 
+            /**
+             * 重置hostHolder
+             */
             this.resetByteBuffer(hostHolder, 8);
             // Record ConsumeQueue information
             keyBuilder.setLength(0);
@@ -726,12 +737,18 @@ public class DLedgerCommitLog extends CommitLog {
             keyBuilder.append(msgInner.getQueueId());
             String key = keyBuilder.toString();
 
+            /**
+             * 计算queueOffset  为空则初始化
+             */
             Long queueOffset = DLedgerCommitLog.this.topicQueueTable.get(key);
             if (null == queueOffset) {
                 queueOffset = 0L;
                 DLedgerCommitLog.this.topicQueueTable.put(key, queueOffset);
             }
 
+            /**
+             * 是否为事务消息
+             */
             // Transaction messages that require special handling
             final int tranType = MessageSysFlag.getTransactionValue(msgInner.getSysFlag());
             switch (tranType) {
@@ -749,6 +766,7 @@ public class DLedgerCommitLog extends CommitLog {
 
             /**
              * Serialize message
+             * 计算msg中Properties
              */
             final byte[] propertiesData =
                     msgInner.getPropertiesString() == null ? null : msgInner.getPropertiesString().getBytes(MessageDecoder.CHARSET_UTF8);
@@ -760,21 +778,42 @@ public class DLedgerCommitLog extends CommitLog {
                 return new EncodeResult(AppendMessageStatus.PROPERTIES_SIZE_EXCEEDED, null, key);
             }
 
+            /**
+             * 计算topic长度
+             */
             final byte[] topicData = msgInner.getTopic().getBytes(MessageDecoder.CHARSET_UTF8);
             final int topicLength = topicData.length;
 
+            /**
+             * 计算body长度
+             */
             final int bodyLength = msgInner.getBody() == null ? 0 : msgInner.getBody().length;
 
+            /**
+             * 计算即将存入commitlog的消息大小
+             */
             final int msgLen = calMsgLength(bodyLength, topicLength, propertiesLength);
 
             // Exceeds the maximum message
+            /**
+             * 消息大小不能大于4m
+             */
             if (msgLen > this.maxMessageSize) {
                 DLedgerCommitLog.log.warn("message size exceeded, msg total size: " + msgLen + ", msg body size: " + bodyLength
                         + ", maxMessageSize: " + this.maxMessageSize);
                 return new EncodeResult(AppendMessageStatus.MESSAGE_SIZE_EXCEEDED, null, key);
             }
+
+
             // Initialization of storage space
+            /**
+             * 重置msgStoreItemMemory
+             */
             this.resetByteBuffer(msgStoreItemMemory, msgLen);
+
+            /**
+             * 写入数据
+             */
             // 1 TOTALSIZE
             this.msgStoreItemMemory.putInt(msgLen);
             // 2 MAGICCODE
@@ -821,6 +860,10 @@ public class DLedgerCommitLog extends CommitLog {
             }
             byte[] data = new byte[msgLen];
             this.msgStoreItemMemory.clear();
+
+            /**
+             * 将msgStoreItemMemory的内容写入data
+             */
             this.msgStoreItemMemory.get(data);
             return new EncodeResult(AppendMessageStatus.PUT_OK, data, key);
         }
