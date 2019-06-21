@@ -2342,6 +2342,7 @@ public class DefaultMessageStore implements MessageStore {
                         for (int readSize = 0; readSize < result.getSize() && doNext; ) {
                             /**
                              * 遍历byteBuffer  返回最近一条消息
+                             * dledger模式   也是返回解析后的commitlog结构   舍弃dledger header部分
                              */
                             DispatchRequest dispatchRequest =
                                 DefaultMessageStore.this.commitLog.checkMessageAndReturnSize(result.getByteBuffer(), false, false);

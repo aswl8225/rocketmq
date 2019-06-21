@@ -68,6 +68,10 @@ public class DLedgerCommitLog extends CommitLog {
     private volatile long beginTimeInDledgerLock = 0;
 
     //This offset separate the old commitlog from dledger commitlog
+    /**
+     * dividedCommitlogOffset之前的消息都是commitlog
+     * 之后的消息都是dledgerCommitlog
+     */
     private long dividedCommitlogOffset = -1;
 
 
@@ -89,6 +93,9 @@ public class DLedgerCommitLog extends CommitLog {
         id = Integer.valueOf(dLedgerConfig.getSelfId().substring(1)) + 1;
         dLedgerServer = new DLedgerServer(dLedgerConfig);
         dLedgerFileStore = (DLedgerMmapFileStore) dLedgerServer.getdLedgerStore();
+        /**
+         * dledger下   回填存储的commitlog的PHYSICALOFFSET
+         */
         DLedgerMmapFileStore.AppendHook appendHook = (entry, buffer, bodyOffset) -> {
             assert bodyOffset == DLedgerEntry.BODY_OFFSET;
             buffer.position(buffer.position() + bodyOffset + MessageDecoder.PHY_POS_POSITION);
@@ -236,14 +243,28 @@ public class DLedgerCommitLog extends CommitLog {
 
     }
 
+    /**
+     * 通过committedPos截取消息   即只返回经过raft算法后   得到commit的消息
+     * @param sbr
+     * @return
+     */
     public SelectMmapBufferResult truncate(SelectMmapBufferResult sbr) {
         long committedPos = dLedgerFileStore.getCommittedPos();
+        /**
+         * sbr中只有没经过commit的消息
+         */
         if (sbr == null || sbr.getStartOffset() == committedPos) {
             return null;
         }
+        /**
+         * sbr中的消息   都得到raft算法确认
+         */
         if (sbr.getStartOffset() + sbr.getSize() <= committedPos) {
             return sbr;
         } else {
+            /**
+             * 只返回commit的消息   没有得到确认的消息不返回
+             */
             sbr.setSize((int) (committedPos - sbr.getStartOffset()));
             return sbr;
         }
@@ -298,9 +319,12 @@ public class DLedgerCommitLog extends CommitLog {
         if (mappedFile != null) {
             int pos = (int) (offset % mappedFileSize);
             /**
-             * 获取mappedFile文件   从pos位置开始的所有消息  是wrotePosition而不是
+             * 获取mappedFile文件   从pos位置开始的所有消息  是wrotePosition而不是committedPosition
              */
             SelectMmapBufferResult sbr = mappedFile.selectMappedBuffer(pos);
+            /**
+             * 获取sbr中   经过commit确认的消息
+             */
             return convertSbr(truncate(sbr));
         }
 
@@ -418,7 +442,7 @@ public class DLedgerCommitLog extends CommitLog {
             DispatchRequest dispatchRequest = super.checkMessageAndReturnSize(byteBuffer, checkCRC, readBody);
 
             /**
-             * 应为是dledger   所以在这里需要加上dledger数据的长度才是真正的消息提
+             * 因为是dledger   所以在这里需要加上dledger数据的长度才是真正的消息提
              */
             if (dispatchRequest.isSuccess()) {
                 dispatchRequest.setBufferSize(dispatchRequest.getMsgSize() + bodyOffset);
@@ -526,16 +550,25 @@ public class DLedgerCommitLog extends CommitLog {
             }
             AppendEntryRequest request = new AppendEntryRequest();
             request.setGroup(dLedgerConfig.getGroup());
+            /**
+             * 只有master才会接受producer发送的消息   所以这里指定remoteId为自己
+             */
             request.setRemoteId(dLedgerServer.getMemberState().getSelfId());
             request.setBody(encodeResult.data);
 
             /**
-             * dledger   append消息
+             * dledger   append消息   会在dledger代码中   调用appendHooks   回填commitlog的phyoffset
              */
             dledgerFuture = (AppendFuture<AppendEntryResponse>) dLedgerServer.handleAppend(request);
             if (dledgerFuture.getPos() == -1) {
                 return new PutMessageResult(PutMessageStatus.OS_PAGECACHE_BUSY, new AppendMessageResult(AppendMessageStatus.UNKNOWN_ERROR));
             }
+            /**
+             * dledger模式下   commitlog数据结构   对应的phyoffset
+             *
+             * dledgerFuture.getPos()  为dledgercommitlog存储的位置
+             * DLedgerEntry.BODY_OFFSET  为commitlog消息体存储的位置
+             */
             long wroteOffset = dledgerFuture.getPos() + DLedgerEntry.BODY_OFFSET;
             ByteBuffer buffer = ByteBuffer.allocate(MessageDecoder.MSG_ID_LENGTH);
             String msgId = MessageDecoder.createMessageId(buffer, msg.getStoreHostBytes(), wroteOffset);
@@ -548,6 +581,9 @@ public class DLedgerCommitLog extends CommitLog {
                 case MessageSysFlag.TRANSACTION_NOT_TYPE:
                 case MessageSysFlag.TRANSACTION_COMMIT_TYPE:
                     // The next update ConsumeQueue information
+                    /**
+                     * queueOffset  +1
+                     */
                     DLedgerCommitLog.this.topicQueueTable.put(encodeResult.queueOffsetKey, queueOffset + 1);
                     break;
                 default:
@@ -722,7 +758,7 @@ public class DLedgerCommitLog extends CommitLog {
 
             // PHY OFFSET
             /**
-             * 暂时为0   dledger存储时  再修改真正的offset
+             * 暂时为0   dledger存储时  通过AppendHook来回填真正的物理偏移  phyoffset
              */
             long wroteOffset = 0;
 
