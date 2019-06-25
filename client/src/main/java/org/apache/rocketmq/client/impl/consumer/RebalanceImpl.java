@@ -448,7 +448,7 @@ public abstract class RebalanceImpl {
                 ProcessQueue pq = new ProcessQueue();
 
                 /**
-                 * 计算消费进度
+                 * 计算消费进度   从broker端查询
                  */
                 long nextOffset = this.computePullFromWhere(mq);
                 if (nextOffset >= 0) {

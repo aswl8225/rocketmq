@@ -850,6 +850,9 @@ public class DefaultMessageStore implements MessageStore {
                          * commitlog中的最大offset-本次拉取消息的最大offset
                          */
                         long diff = maxOffsetPy - maxPhyOffsetPulling;
+                        /**
+                         * 内存中存储数据的最大值
+                         */
                         long memory = (long) (StoreUtil.TOTAL_PHYSICAL_MEMORY_SIZE
                             * (this.messageStoreConfig.getAccessMessageInMemoryMaxRatio() / 100.0));
 

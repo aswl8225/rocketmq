@@ -505,6 +505,9 @@ public class DefaultMQPushConsumerImpl implements MQConsumerInner {
         };
 
         boolean commitOffsetEnable = false;
+        /**
+         * 本地缓存中的消费进度
+         */
         long commitOffsetValue = 0L;
         /**
          * 集群消费

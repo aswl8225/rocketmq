@@ -233,7 +233,11 @@ public class DLedgerCommitLog extends CommitLog {
         return 1;
     }
 
-
+    /**
+     * 将SelectMmapBufferResult转换为DLedgerSelectMappedBufferResult
+     * @param sbr
+     * @return
+     */
     public SelectMappedBufferResult convertSbr(SelectMmapBufferResult sbr) {
         if (sbr == null) {
             return null;
@@ -567,7 +571,7 @@ public class DLedgerCommitLog extends CommitLog {
              * dledger模式下   commitlog数据结构   对应的phyoffset
              *
              * dledgerFuture.getPos()  为dledgercommitlog存储的位置
-             * DLedgerEntry.BODY_OFFSET  为commitlog消息体存储的位置
+             * dledgerFuture.getPos()+DLedgerEntry.BODY_OFFSET  为commitlog消息体存储的位置
              */
             long wroteOffset = dledgerFuture.getPos() + DLedgerEntry.BODY_OFFSET;
             ByteBuffer buffer = ByteBuffer.allocate(MessageDecoder.MSG_ID_LENGTH);
@@ -641,15 +645,34 @@ public class DLedgerCommitLog extends CommitLog {
     }
 
 
+    /**
+     * 获取从offset开始  长度为size的消息
+     * @param offset
+     * @param size
+     * @return
+     */
     @Override
     public SelectMappedBufferResult getMessage(final long offset, final int size) {
+        /**
+         * 按commitlog数据结构  获取消息
+         */
         if (offset < dividedCommitlogOffset) {
             return super.getMessage(offset, size);
         }
+
+        /**
+         * dledger数据结构   获取消息
+         */
         int mappedFileSize = this.dLedgerServer.getdLedgerConfig().getMappedFileSizeForEntryData();
+        /**
+         * 获取offset所在的MappedFile
+         */
         MmapFile mappedFile = this.dLedgerFileList.findMappedFileByOffset(offset, offset == 0);
         if (mappedFile != null) {
             int pos = (int) (offset % mappedFileSize);
+            /**
+             * 截取mappedFile  从pos开始  长度为size的数据
+             */
             return convertSbr(mappedFile.selectMappedBuffer(pos, size));
         }
         return null;
