@@ -232,6 +232,12 @@ public class SendMessageProcessor extends AbstractSendMessageProcessor implement
         /**
          * 延迟级别
          */
+        /**
+         * Message consume retry strategy<br>
+         * -1,no retry,put into DLQ directly<br>
+         * 0,broker control retry frequency<br>
+         * >0,client control retry frequency
+         */
         int delayLevel = requestHeader.getDelayLevel();
 
         /**
