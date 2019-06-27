@@ -562,6 +562,10 @@ public class DLedgerCommitLog extends CommitLog {
 
             /**
              * dledger   append消息   会在dledger代码中   调用appendHooks   回填commitlog的phyoffset
+             * dledger   append消息   会在dledger代码中   调用appendHooks   回填commitlog的phyoffset
+             * dledger   append消息   会在dledger代码中   调用appendHooks   回填commitlog的phyoffset
+             * dledger   append消息   会在dledger代码中   调用appendHooks   回填commitlog的phyoffset
+             * dledger   append消息   会在dledger代码中   调用appendHooks   回填commitlog的phyoffset
              */
             dledgerFuture = (AppendFuture<AppendEntryResponse>) dLedgerServer.handleAppend(request);
             if (dledgerFuture.getPos() == -1) {

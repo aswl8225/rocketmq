@@ -386,6 +386,9 @@ public class DefaultMQProducerImpl implements MQProducerInner {
                 thisHeader.setCommitLogOffset(checkRequestHeader.getCommitLogOffset());
                 thisHeader.setProducerGroup(producerGroup);
                 thisHeader.setTranStateTableOffset(checkRequestHeader.getTranStateTableOffset());
+                /**
+                 * 表示当前请求来自事务回查
+                 */
                 thisHeader.setFromTransactionCheck(true);
 
                 String uniqueKey = message.getProperties().get(MessageConst.PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX);

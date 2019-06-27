@@ -57,7 +57,7 @@ public class TransactionProducer {
         for (int i = 0; i < 1; i++) {
             try {
                 Message msg =
-                    new Message("TopicTest1234", tags[i % tags.length], "KEY" + i,
+                    new Message("transactionTopic", tags[i % tags.length], "KEY" + i,
                         ("事务消息 " + i+","+System.currentTimeMillis()).getBytes(RemotingHelper.DEFAULT_CHARSET));
                 msg.setKeys(System.currentTimeMillis()+"");
 

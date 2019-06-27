@@ -535,7 +535,7 @@ public class ScheduleMessageService extends ConfigManager {
             MessageAccessor.clearProperty(msgInner, MessageConst.PROPERTY_DELAY_TIME_LEVEL);
 
             /**
-             * 恢复消息真正指向得topic和queueid
+             * 恢复消息真正指向得topic和queueid   topic指定得是重试队列
              */
             msgInner.setTopic(msgInner.getProperty(MessageConst.PROPERTY_REAL_TOPIC));
 
