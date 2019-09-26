@@ -91,9 +91,6 @@ public class AsyncTraceDispatcher implements TraceDispatcher {
             this.traceTopicName = MixAll.RMQ_SYS_TRACE_TOPIC;
         }
 
-        /**
-         * 消息轨迹的生产者  默认组名为_INNER_TRACE_PRODUCER
-         */
         this.traceExecutor = new ThreadPoolExecutor(//
             10, //
             20, //
@@ -101,6 +98,9 @@ public class AsyncTraceDispatcher implements TraceDispatcher {
             TimeUnit.MILLISECONDS, //
             this.appenderQueue, //
             new ThreadFactoryImpl("MQTraceSendThread_"));
+        /**
+         * 消息轨迹的生产者  默认组名为_INNER_TRACE_PRODUCER
+         */
         traceProducer = getAndCreateTraceProducer(rpcHook);
     }
 

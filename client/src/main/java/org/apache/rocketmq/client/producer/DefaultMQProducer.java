@@ -263,11 +263,20 @@ public class DefaultMQProducer extends ClientConfig implements MQProducer {
         this.producerGroup = producerGroup;
         defaultMQProducerImpl = new DefaultMQProducerImpl(this, rpcHook);
         //if client open the message trace feature
+        /**
+         * 允许追踪消息轨迹
+         */
         if (enableMsgTrace) {
             try {
+                /**
+                 * 实例化
+                 */
                 AsyncTraceDispatcher dispatcher = new AsyncTraceDispatcher(customizedTraceTopic, rpcHook);
                 dispatcher.setHostProducer(this.getDefaultMQProducerImpl());
                 traceDispatcher = dispatcher;
+                /**
+                 * 注入sendMessageHookList
+                 */
                 this.getDefaultMQProducerImpl().registerSendMessageHook(
                     new SendMessageTraceHookImpl(traceDispatcher));
             } catch (Throwable e) {

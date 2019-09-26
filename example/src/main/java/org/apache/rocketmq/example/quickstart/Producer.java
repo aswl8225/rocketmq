@@ -16,11 +16,14 @@
  */
 package org.apache.rocketmq.example.quickstart;
 
+import com.alibaba.fastjson.JSON;
 import org.apache.rocketmq.client.exception.MQClientException;
 import org.apache.rocketmq.client.producer.DefaultMQProducer;
 import org.apache.rocketmq.client.producer.SendResult;
 import org.apache.rocketmq.common.message.Message;
 import org.apache.rocketmq.remoting.common.RemotingHelper;
+
+import java.util.Date;
 
 /**
  * This class demonstrates how to send messages to brokers using provided {@link DefaultMQProducer}.
@@ -52,6 +55,11 @@ public class Producer {
          */
         producer.start();
 
+        UserStat stat = new UserStat() ;
+        stat.setTransDate(new Date());
+        stat.setAppId("2121212");
+        stat.setUserId("212eeeeeeeeeee1212");
+
         for (int i = 0; i < 10; i++) {
             try {
 
@@ -60,7 +68,7 @@ public class Producer {
                  */
                 Message msg = new Message("DefaultCluster" /* Topic */,
                     "tagA" /* Tag */,
-                    ("Hello RocketMQ " + i).getBytes(RemotingHelper.DEFAULT_CHARSET) /* Message body */
+                    JSON.toJSONString(stat).getBytes(RemotingHelper.DEFAULT_CHARSET) /* Message body */
                 );
                 msg.setKeys(System.currentTimeMillis()+"");
 
