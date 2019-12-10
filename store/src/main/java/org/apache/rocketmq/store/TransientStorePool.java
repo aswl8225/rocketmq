@@ -39,7 +39,7 @@ public class TransientStorePool {
     public TransientStorePool(final MessageStoreConfig storeConfig) {
         this.storeConfig = storeConfig;
         this.poolSize = storeConfig.getTransientStorePoolSize();
-        this.fileSize = storeConfig.getMapedFileSizeCommitLog();
+        this.fileSize = storeConfig.getMappedFileSizeCommitLog();
         this.availableBuffers = new ConcurrentLinkedDeque<>();
     }
 
@@ -101,7 +101,7 @@ public class TransientStorePool {
      * 返回当前有多少个内存buffer
      * @return
      */
-    public int remainBufferNumbs() {
+    public int availableBufferNums() {
         /**
          * 如果支持堆外内存  则返回目前有多少个堆外内存buffer
          */

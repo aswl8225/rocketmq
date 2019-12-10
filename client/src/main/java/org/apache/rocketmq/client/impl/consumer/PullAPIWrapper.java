@@ -117,7 +117,7 @@ public class PullAPIWrapper {
                  * 如果是事务消息
                  */
                 String traFlag = msg.getProperty(MessageConst.PROPERTY_TRANSACTION_PREPARED);
-                if (traFlag != null && Boolean.parseBoolean(traFlag)) {
+                if (Boolean.parseBoolean(traFlag)) {
                     msg.setTransactionId(msg.getProperty(MessageConst.PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX));
                 }
 

@@ -53,7 +53,7 @@ public class MessageBatch extends Message implements Iterable<Message> {
              * 非延迟消息
              */
             if (message.getDelayTimeLevel() > 0) {
-                throw new UnsupportedOperationException("TimeDelayLevel in not supported for batching");
+                throw new UnsupportedOperationException("TimeDelayLevel is not supported for batching");
             }
             /**
              * 非重试队列
