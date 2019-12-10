@@ -22,6 +22,7 @@ import java.util.List;
 import org.apache.rocketmq.common.constant.LoggerName;
 import org.apache.rocketmq.logging.InternalLogger;
 import org.apache.rocketmq.logging.InternalLoggerFactory;
+import org.apache.rocketmq.store.config.BrokerRole;
 import org.apache.rocketmq.store.config.StorePathConfigHelper;
 /**
  * ConsumeQueue存储结构
@@ -366,8 +367,10 @@ public class ConsumeQueue {
                  * |—————————————————————————————————————————————————————|
                  */
                 for (int i = 0; i < logicFileSize; i += CQ_STORE_UNIT_SIZE) {
-                    long offset = byteBuffer.getLong();//消息的起始物理偏移量physical offset
-                    int size = byteBuffer.getInt();//消息大小size
+                    ////消息的起始物理偏移量physical offset
+                    long offset = byteBuffer.getLong();
+                    //消息大小size
+                    int size = byteBuffer.getInt();
                     long tagsCode = byteBuffer.getLong();
 
                     if (0 == i) {
@@ -507,9 +510,12 @@ public class ConsumeQueue {
             if (result != null) {
                 try {
                     for (int i = 0; i < result.getSize(); i += ConsumeQueue.CQ_STORE_UNIT_SIZE) {
-                        long offsetPy = result.getByteBuffer().getLong();//commitlog对应的offset
-                        result.getByteBuffer().getInt();//size
-                        long tagsCode = result.getByteBuffer().getLong();//tags对应的hash
+                        //commitlog对应的offset
+                        long offsetPy = result.getByteBuffer().getLong();
+                        //size
+                        result.getByteBuffer().getInt();
+                        //tags对应的hash
+                        long tagsCode = result.getByteBuffer().getLong();
 
                         if (offsetPy >= phyMinOffset) {
                             /**
@@ -578,6 +584,10 @@ public class ConsumeQueue {
             boolean result = this.putMessagePositionInfo(request.getCommitLogOffset(),
                 request.getMsgSize(), tagsCode, request.getConsumeQueueOffset());
             if (result) {
+                if (this.defaultMessageStore.getMessageStoreConfig().getBrokerRole() == BrokerRole.SLAVE ||
+                    this.defaultMessageStore.getMessageStoreConfig().isEnableDLegerCommitLog()) {
+                    this.defaultMessageStore.getStoreCheckpoint().setPhysicMsgTimestamp(request.getStoreTimestamp());
+                }
                 /**
                  * 更新checkpoint文件对应的的logicsMsgTimestamp
                  * StoreTimestamp 消息在broker存储时间
@@ -640,7 +650,7 @@ public class ConsumeQueue {
          * |         8byte       |    4byte     |      8byte     |
          * |—————————————————————————————————————————————————————|
          */
-        this.byteBufferIndex.flip();//相当于重置
+        this.byteBufferIndex.flip();
         this.byteBufferIndex.limit(CQ_STORE_UNIT_SIZE);
         this.byteBufferIndex.putLong(offset);
         this.byteBufferIndex.putInt(size);

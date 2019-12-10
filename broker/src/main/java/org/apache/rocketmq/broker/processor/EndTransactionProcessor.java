@@ -55,7 +55,7 @@ public class EndTransactionProcessor implements NettyRequestProcessor {
         final RemotingCommand response = RemotingCommand.createResponseCommand(null);
         final EndTransactionRequestHeader requestHeader =
             (EndTransactionRequestHeader)request.decodeCommandCustomHeader(EndTransactionRequestHeader.class);
-        LOGGER.info("Transaction request:{}", requestHeader);
+        LOGGER.debug("Transaction request:{}", requestHeader);
 
         /**
          * 当前borker为slave
@@ -128,7 +128,6 @@ public class EndTransactionProcessor implements NettyRequestProcessor {
                     return null;
             }
         }
-
         OperationResult result = new OperationResult();
         /**
          * 确认提交

@@ -223,6 +223,9 @@ public class TransactionalMessageBridge {
                     this.brokerController.getBrokerStatsManager().incGroupGetSize(group, topic,
                         getMessageResult.getBufferTotalSize());
                     this.brokerController.getBrokerStatsManager().incBrokerGetNums(getMessageResult.getMessageCount());
+                    if (foundList == null || foundList.size() == 0) {
+                        break;
+                    }
                     this.brokerController.getBrokerStatsManager().recordDiskFallBehindTime(group, topic, queueId,
                         this.brokerController.getMessageStore().now() - foundList.get(foundList.size() - 1)
                             .getStoreTimestamp());
@@ -233,6 +236,7 @@ public class TransactionalMessageBridge {
                         getMessageResult.getStatus(), topic, group, offset);
                     break;
                 case NO_MESSAGE_IN_QUEUE:
+                case OFFSET_OVERFLOW_ONE:
                     pullStatus = PullStatus.NO_NEW_MSG;
                     LOGGER.warn("No new message. GetMessageStatus={}, topic={}, groupId={}, requestOffset={}",
                         getMessageResult.getStatus(), topic, group, offset);
@@ -241,7 +245,6 @@ public class TransactionalMessageBridge {
                 case NO_MATCHED_LOGIC_QUEUE:
                 case OFFSET_FOUND_NULL:
                 case OFFSET_OVERFLOW_BADLY:
-                case OFFSET_OVERFLOW_ONE:
                 case OFFSET_TOO_SMALL:
                     pullStatus = PullStatus.OFFSET_ILLEGAL;
                     LOGGER.warn("Offset illegal. GetMessageStatus={}, topic={}, groupId={}, requestOffset={}",
@@ -275,8 +278,10 @@ public class TransactionalMessageBridge {
                 /**
                  * 解码
                  */
-                MessageExt msgExt = MessageDecoder.decode(bb);
-                foundList.add(msgExt);
+                MessageExt msgExt = MessageDecoder.decode(bb, true, false);
+                if (msgExt != null) {
+                    foundList.add(msgExt);
+                }
             }
 
         } finally {

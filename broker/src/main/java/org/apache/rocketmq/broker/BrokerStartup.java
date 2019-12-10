@@ -213,6 +213,10 @@ public class BrokerStartup {
                     break;
             }
 
+            if (messageStoreConfig.isEnableDLegerCommitLog()) {
+                brokerConfig.setBrokerId(-1);
+            }
+
             /**
              * 设置ha端口   10912
              */

@@ -40,11 +40,11 @@ public class MQClientManager {
         return instance;
     }
 
-    public MQClientInstance getAndCreateMQClientInstance(final ClientConfig clientConfig) {
-        return getAndCreateMQClientInstance(clientConfig, null);
+    public MQClientInstance getOrCreateMQClientInstance(final ClientConfig clientConfig) {
+        return getOrCreateMQClientInstance(clientConfig, null);
     }
 
-    public MQClientInstance getAndCreateMQClientInstance(final ClientConfig clientConfig, RPCHook rpcHook) {
+    public MQClientInstance getOrCreateMQClientInstance(final ClientConfig clientConfig, RPCHook rpcHook) {
         /**
          * 服务器ip@InstanceName
          */
