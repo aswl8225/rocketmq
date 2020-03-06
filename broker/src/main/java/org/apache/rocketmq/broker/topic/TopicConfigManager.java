@@ -153,15 +153,6 @@ public class TopicConfigManager extends ConfigManager {
     }
 
     /**
-     * topic不等于TBW102
-     * @param topic
-     * @return
-     */
-    public boolean isTopicCanSendMessage(final String topic) {
-        return !topic.equals(MixAll.AUTO_CREATE_TOPIC_KEY_TOPIC);
-    }
-
-    /**
      * 获取TopicConfig
      * @param topic
      * @return
