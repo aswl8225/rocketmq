@@ -25,6 +25,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.apache.rocketmq.common.ConfigManager;
+import org.apache.rocketmq.common.MixAll;
 import org.apache.rocketmq.common.TopicFilterType;
 import org.apache.rocketmq.common.constant.LoggerName;
 import org.apache.rocketmq.logging.InternalLogger;
@@ -411,7 +412,11 @@ public class ScheduleMessageService extends ConfigManager {
                                          * 将消息从延迟队列  切换到重试队列
                                          */
                                         MessageExtBrokerInner msgInner = this.messageTimeup(msgExt);
-
+                                        if (MixAll.RMQ_SYS_TRANS_HALF_TOPIC.equals(msgInner.getTopic())) {
+                                            log.error("[BUG] the real topic of schedule msg is {}, discard the msg. msg={}",
+                                                    msgInner.getTopic(), msgInner);
+                                            continue;
+                                        }
                                         /**
                                          * 消息存储  重试队列  作为一条全新的消息  再次存储
                                          * 消息存储  重试队列  作为一条全新的消息  再次存储

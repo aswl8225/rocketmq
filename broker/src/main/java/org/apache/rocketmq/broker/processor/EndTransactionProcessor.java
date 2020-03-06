@@ -154,7 +154,7 @@ public class EndTransactionProcessor implements NettyRequestProcessor {
                      */
                     msgInner.setPreparedTransactionOffset(requestHeader.getCommitLogOffset());
                     msgInner.setStoreTimestamp(result.getPrepareMessage().getStoreTimestamp());
-
+                    MessageAccessor.clearProperty(msgInner, MessageConst.PROPERTY_TRANSACTION_PREPARED);
                     /**
                      * 存储消息 按照消息初始得topic和queueid
                      * 存储消息 按照消息初始得topic和queueid
