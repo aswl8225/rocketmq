@@ -1062,6 +1062,12 @@ public class MQClientInstance {
         }
     }
 
+    /**
+     * 是否有同名的存在
+     * @param group
+     * @param producer
+     * @return
+     */
     public boolean registerProducer(final String group, final DefaultMQProducerImpl producer) {
         if (null == group || null == producer) {
             return false;
