@@ -40,6 +40,7 @@ import java.util.Date;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 
 public class TransactionalMessageServiceImpl implements TransactionalMessageService {
@@ -58,6 +59,11 @@ public class TransactionalMessageServiceImpl implements TransactionalMessageServ
     }
 
     private ConcurrentHashMap<MessageQueue, MessageQueue> opQueueMap = new ConcurrentHashMap<>();
+
+    @Override
+    public CompletableFuture<PutMessageResult> asyncPrepareMessage(MessageExtBrokerInner messageInner) {
+        return transactionalMessageBridge.asyncPutHalfMessage(messageInner);
+    }
 
     /**
      * 存储预提交消息   重置发送得topic和queueid
@@ -387,8 +393,7 @@ public class TransactionalMessageServiceImpl implements TransactionalMessageServ
                 }
             }
             //for循环结束
-        } catch (Exception e) {
-            e.printStackTrace();
+        } catch (Throwable e) {
             log.error("Check error", e);
         }
 

@@ -19,6 +19,8 @@ package org.apache.rocketmq.broker.processor;
 import java.net.SocketAddress;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
 
 import io.netty.channel.ChannelHandlerContext;
 import org.apache.rocketmq.broker.BrokerController;
@@ -48,6 +50,7 @@ import org.apache.rocketmq.common.sysflag.MessageSysFlag;
 import org.apache.rocketmq.common.sysflag.TopicSysFlag;
 import org.apache.rocketmq.remoting.exception.RemotingCommandException;
 import org.apache.rocketmq.remoting.netty.NettyRequestProcessor;
+import org.apache.rocketmq.remoting.netty.RemotingResponseCallback;
 import org.apache.rocketmq.remoting.protocol.RemotingCommand;
 import org.apache.rocketmq.store.MessageExtBrokerInner;
 import org.apache.rocketmq.store.PutMessageResult;
@@ -65,13 +68,29 @@ public class SendMessageProcessor extends AbstractSendMessageProcessor implement
     @Override
     public RemotingCommand processRequest(ChannelHandlerContext ctx,
                                           RemotingCommand request) throws RemotingCommandException {
-        SendMessageContext mqtraceContext;
+        RemotingCommand response = null;
+        try {
+            response = asyncProcessRequest(ctx, request).get();
+        } catch (InterruptedException | ExecutionException e) {
+            log.error("process SendMessage error, request : " + request.toString(), e);
+        }
+        return response;
+    }
+
+    @Override
+    public void asyncProcessRequest(ChannelHandlerContext ctx, RemotingCommand request, RemotingResponseCallback responseCallback) throws Exception {
+        asyncProcessRequest(ctx, request).thenAccept(responseCallback::callback);
+    }
+
+    public CompletableFuture<RemotingCommand> asyncProcessRequest(ChannelHandlerContext ctx,
+                                                                  RemotingCommand request) throws RemotingCommandException {
+        final SendMessageContext mqtraceContext;
         switch (request.getCode()) {
             case RequestCode.CONSUMER_SEND_MSG_BACK:
                 /**
                  * 发送重试队列
                  */
-                return this.consumerSendMsgBack(ctx, request);
+                return this.asyncConsumerSendMsgBack(ctx, request);
             default:
                 /**
                  * 接受消息
@@ -79,35 +98,28 @@ public class SendMessageProcessor extends AbstractSendMessageProcessor implement
                  */
                 SendMessageRequestHeader requestHeader = parseRequestHeader(request);
                 if (requestHeader == null) {
-                    return null;
+                    return CompletableFuture.completedFuture(null);
                 }
-
                 /**
                  * 没有hook 下面跳过
                  */
                 mqtraceContext = buildMsgContext(ctx, requestHeader);
                 this.executeSendMessageHookBefore(ctx, request, mqtraceContext);
-
-                RemotingCommand response;
-
                 if (requestHeader.isBatch()) {
                     /**
                      * 批量消息
                      * 批量消息
                      * 批量消息
                      */
-                    response = this.sendBatchMessage(ctx, request, mqtraceContext, requestHeader);
+                    return this.asyncSendBatchMessage(ctx, request, mqtraceContext, requestHeader);
                 } else {
                     /**
                      * 处理非批量消息
                      * 处理非批量消息
                      * 处理非批量消息
                      */
-                    response = this.sendMessage(ctx, request, mqtraceContext, requestHeader);
+                    return this.asyncSendMessage(ctx, request, mqtraceContext, requestHeader);
                 }
-
-                this.executeSendMessageHookAfter(response, mqtraceContext);
-                return response;
         }
     }
 
@@ -124,26 +136,16 @@ public class SendMessageProcessor extends AbstractSendMessageProcessor implement
      * @return
      * @throws RemotingCommandException
      */
-    private RemotingCommand consumerSendMsgBack(final ChannelHandlerContext ctx, final RemotingCommand request)
-        throws RemotingCommandException {
+    private CompletableFuture<RemotingCommand> asyncConsumerSendMsgBack(ChannelHandlerContext ctx,
+                                                                        RemotingCommand request) throws RemotingCommandException {
         final RemotingCommand response = RemotingCommand.createResponseCommand(null);
         final ConsumerSendMsgBackRequestHeader requestHeader =
-            (ConsumerSendMsgBackRequestHeader)request.decodeCommandCustomHeader(ConsumerSendMsgBackRequestHeader.class);
-
+                (ConsumerSendMsgBackRequestHeader)request.decodeCommandCustomHeader(ConsumerSendMsgBackRequestHeader.class);
         String namespace = NamespaceUtil.getNamespaceFromResource(requestHeader.getGroup());
         if (this.hasConsumeMessageHook() && !UtilAll.isBlank(requestHeader.getOriginMsgId())) {
-
-            ConsumeMessageContext context = new ConsumeMessageContext();
-            context.setNamespace(namespace);
-            context.setConsumerGroup(requestHeader.getGroup());
-            context.setTopic(requestHeader.getOriginTopic());
-            context.setCommercialRcvStats(BrokerStatsManager.StatsType.SEND_BACK);
-            context.setCommercialRcvTimes(1);
-            context.setCommercialOwner(request.getExtFields().get(BrokerStatsManager.COMMERCIAL_OWNER));
-
+            ConsumeMessageContext context = buildConsumeMessageContext(namespace, requestHeader, request);
             this.executeConsumeMessageHookAfter(context);
         }
-
         /**
          * 获得订阅组信息
          */
@@ -153,16 +155,15 @@ public class SendMessageProcessor extends AbstractSendMessageProcessor implement
             response.setCode(ResponseCode.SUBSCRIPTION_GROUP_NOT_EXIST);
             response.setRemark("subscription group not exist, " + requestHeader.getGroup() + " "
                 + FAQUrl.suggestTodo(FAQUrl.SUBSCRIPTION_GROUP_NOT_EXIST));
-            return response;
+            return CompletableFuture.completedFuture(response);
         }
-
         /**
          * 当前broker不支持写操作
          */
         if (!PermName.isWriteable(this.brokerController.getBrokerConfig().getBrokerPermission())) {
             response.setCode(ResponseCode.NO_PERMISSION);
             response.setRemark("the broker[" + this.brokerController.getBrokerConfig().getBrokerIP1() + "] sending message is forbidden");
-            return response;
+            return CompletableFuture.completedFuture(response);
         }
 
         /**
@@ -171,7 +172,7 @@ public class SendMessageProcessor extends AbstractSendMessageProcessor implement
         if (subscriptionGroupConfig.getRetryQueueNums() <= 0) {
             response.setCode(ResponseCode.SUCCESS);
             response.setRemark(null);
-            return response;
+            return CompletableFuture.completedFuture(response);
         }
 
         /**
@@ -179,7 +180,6 @@ public class SendMessageProcessor extends AbstractSendMessageProcessor implement
          */
         String newTopic = MixAll.getRetryTopic(requestHeader.getGroup());
         int queueIdInt = Math.abs(this.random.nextInt() % 99999999) % subscriptionGroupConfig.getRetryQueueNums();
-
         int topicSysFlag = 0;
         if (requestHeader.isUnitMode()) {
             topicSysFlag = TopicSysFlag.buildSysFlag(false, true);
@@ -195,7 +195,7 @@ public class SendMessageProcessor extends AbstractSendMessageProcessor implement
         if (null == topicConfig) {
             response.setCode(ResponseCode.SYSTEM_ERROR);
             response.setRemark("topic[" + newTopic + "] not exist");
-            return response;
+            return CompletableFuture.completedFuture(response);
         }
 
         /**
@@ -204,9 +204,8 @@ public class SendMessageProcessor extends AbstractSendMessageProcessor implement
         if (!PermName.isWriteable(topicConfig.getPerm())) {
             response.setCode(ResponseCode.NO_PERMISSION);
             response.setRemark(String.format("the topic[%s] sending message is forbidden", newTopic));
-            return response;
+            return CompletableFuture.completedFuture(response);
         }
-
         /**
          * 查询Offset处对应的消息
          */
@@ -214,7 +213,7 @@ public class SendMessageProcessor extends AbstractSendMessageProcessor implement
         if (null == msgExt) {
             response.setCode(ResponseCode.SYSTEM_ERROR);
             response.setRemark("look message by offset failed, " + requestHeader.getOffset());
-            return response;
+            return CompletableFuture.completedFuture(response);
         }
 
         /**
@@ -258,13 +257,12 @@ public class SendMessageProcessor extends AbstractSendMessageProcessor implement
             queueIdInt = Math.abs(this.random.nextInt() % 99999999) % DLQ_NUMS_PER_GROUP;
 
             topicConfig = this.brokerController.getTopicConfigManager().createTopicInSendMessageBackMethod(newTopic,
-                DLQ_NUMS_PER_GROUP,
-                PermName.PERM_WRITE, 0
-            );
+                    DLQ_NUMS_PER_GROUP,
+                    PermName.PERM_WRITE, 0);
             if (null == topicConfig) {
                 response.setCode(ResponseCode.SYSTEM_ERROR);
                 response.setRemark("topic[" + newTopic + "] not exist");
-                return response;
+                return CompletableFuture.completedFuture(response);
             }
         } else {
             /**
@@ -278,7 +276,6 @@ public class SendMessageProcessor extends AbstractSendMessageProcessor implement
             if (0 == delayLevel) {
                 delayLevel = 3 + msgExt.getReconsumeTimes();
             }
-
             /**
              * 将delayLevel存储到消息的Property中
              */
@@ -300,8 +297,7 @@ public class SendMessageProcessor extends AbstractSendMessageProcessor implement
         msgInner.setSysFlag(msgExt.getSysFlag());
         msgInner.setBornTimestamp(msgExt.getBornTimestamp());
         msgInner.setBornHost(msgExt.getBornHost());
-        msgInner.setStoreHost(this.getStoreHost());
-
+        msgInner.setStoreHost(msgExt.getStoreHost());
         /**
          * 重试次数+1
          */
@@ -309,43 +305,106 @@ public class SendMessageProcessor extends AbstractSendMessageProcessor implement
 
         String originMsgId = MessageAccessor.getOriginMessageId(msgExt);
         MessageAccessor.setOriginMessageId(msgInner, UtilAll.isBlank(originMsgId) ? msgExt.getMsgId() : originMsgId);
-
         /**
          * 存储消息  作为一条全新的消息  再次存储   只是对应的topic和queueid会改变
          * 存储消息  作为一条全新的消息  再次存储   只是对应的topic和queueid会改变
          * 存储消息  作为一条全新的消息  再次存储   只是对应的topic和queueid会改变
          */
-        PutMessageResult putMessageResult = this.brokerController.getMessageStore().putMessage(msgInner);
-        if (putMessageResult != null) {
-            switch (putMessageResult.getPutMessageStatus()) {
-                case PUT_OK:
-                    /**
-                     * 统计
-                     */
-                    String backTopic = msgExt.getTopic();
-                    String correctTopic = msgExt.getProperty(MessageConst.PROPERTY_RETRY_TOPIC);
-                    if (correctTopic != null) {
-                        backTopic = correctTopic;
-                    }
-
-                    this.brokerController.getBrokerStatsManager().incSendBackNums(requestHeader.getGroup(), backTopic);
-
-                    response.setCode(ResponseCode.SUCCESS);
-                    response.setRemark(null);
-
-                    return response;
-                default:
-                    break;
+        CompletableFuture<PutMessageResult> putMessageResult = this.brokerController.getMessageStore().asyncPutMessage(msgInner);
+        return putMessageResult.thenApply((r) -> {
+            if (r != null) {
+                switch (r.getPutMessageStatus()) {
+                    case PUT_OK:
+                        /**
+                         * 统计
+                         */
+                        String backTopic = msgExt.getTopic();
+                        String correctTopic = msgExt.getProperty(MessageConst.PROPERTY_RETRY_TOPIC);
+                        if (correctTopic != null) {
+                            backTopic = correctTopic;
+                        }
+                        this.brokerController.getBrokerStatsManager().incSendBackNums(requestHeader.getGroup(), backTopic);
+                        response.setCode(ResponseCode.SUCCESS);
+                        response.setRemark(null);
+                        return response;
+                    default:
+                        break;
+                }
+                response.setCode(ResponseCode.SYSTEM_ERROR);
+                response.setRemark(r.getPutMessageStatus().name());
+                return response;
             }
-
             response.setCode(ResponseCode.SYSTEM_ERROR);
-            response.setRemark(putMessageResult.getPutMessageStatus().name());
+            response.setRemark("putMessageResult is null");
             return response;
+        });
+    }
+
+
+    private CompletableFuture<RemotingCommand> asyncSendMessage(ChannelHandlerContext ctx, RemotingCommand request,
+                                                                SendMessageContext mqtraceContext,
+                                                                SendMessageRequestHeader requestHeader) {
+        final RemotingCommand response = preSend(ctx, request, requestHeader);
+        final SendMessageResponseHeader responseHeader = (SendMessageResponseHeader)response.readCustomHeader();
+
+        if (response.getCode() != -1) {
+            return CompletableFuture.completedFuture(response);
         }
 
-        response.setCode(ResponseCode.SYSTEM_ERROR);
-        response.setRemark("putMessageResult is null");
-        return response;
+        final byte[] body = request.getBody();
+
+        int queueIdInt = requestHeader.getQueueId();
+        TopicConfig topicConfig = this.brokerController.getTopicConfigManager().selectTopicConfig(requestHeader.getTopic());
+
+        if (queueIdInt < 0) {
+            queueIdInt = randomQueueId(topicConfig.getWriteQueueNums());
+        }
+
+        MessageExtBrokerInner msgInner = new MessageExtBrokerInner();
+        msgInner.setTopic(requestHeader.getTopic());
+        msgInner.setQueueId(queueIdInt);
+
+        if (!handleRetryAndDLQ(requestHeader, response, request, msgInner, topicConfig)) {
+            return CompletableFuture.completedFuture(response);
+        }
+
+        msgInner.setBody(body);
+        msgInner.setFlag(requestHeader.getFlag());
+        MessageAccessor.setProperties(msgInner, MessageDecoder.string2messageProperties(requestHeader.getProperties()));
+        msgInner.setPropertiesString(requestHeader.getProperties());
+        msgInner.setBornTimestamp(requestHeader.getBornTimestamp());
+        msgInner.setBornHost(ctx.channel().remoteAddress());
+        msgInner.setStoreHost(this.getStoreHost());
+        msgInner.setReconsumeTimes(requestHeader.getReconsumeTimes() == null ? 0 : requestHeader.getReconsumeTimes());
+        CompletableFuture<PutMessageResult> putMessageResult = null;
+        Map<String, String> origProps = MessageDecoder.string2messageProperties(requestHeader.getProperties());
+        String transFlag = origProps.get(MessageConst.PROPERTY_TRANSACTION_PREPARED);
+        if (transFlag != null && Boolean.parseBoolean(transFlag)) {
+            if (this.brokerController.getBrokerConfig().isRejectTransactionMessage()) {
+                response.setCode(ResponseCode.NO_PERMISSION);
+                response.setRemark(
+                        "the broker[" + this.brokerController.getBrokerConfig().getBrokerIP1()
+                                + "] sending transaction message is forbidden");
+                return CompletableFuture.completedFuture(response);
+            }
+            putMessageResult = this.brokerController.getTransactionalMessageService().asyncPrepareMessage(msgInner);
+        } else {
+            putMessageResult = this.brokerController.getMessageStore().asyncPutMessage(msgInner);
+        }
+        return handlePutMessageResultFuture(putMessageResult, response, request, msgInner, responseHeader, mqtraceContext, ctx, queueIdInt);
+    }
+
+    private CompletableFuture<RemotingCommand> handlePutMessageResultFuture(CompletableFuture<PutMessageResult> putMessageResult,
+                                                                            RemotingCommand response,
+                                                                            RemotingCommand request,
+                                                                            MessageExt msgInner,
+                                                                            SendMessageResponseHeader responseHeader,
+                                                                            SendMessageContext sendMessageContext,
+                                                                            ChannelHandlerContext ctx,
+                                                                            int queueIdInt) {
+        return putMessageResult.thenApply((r) ->
+            handlePutMessageResult(r, response, request, msgInner, responseHeader, sendMessageContext, ctx, queueIdInt)
+        );
     }
 
     private boolean handleRetryAndDLQ(SendMessageRequestHeader requestHeader, RemotingCommand response,
@@ -650,38 +709,14 @@ public class SendMessageProcessor extends AbstractSendMessageProcessor implement
      * @return
      * @throws RemotingCommandException
      */
-    private RemotingCommand sendBatchMessage(final ChannelHandlerContext ctx,
-                                             final RemotingCommand request,
-                                             final SendMessageContext sendMessageContext,
-                                             final SendMessageRequestHeader requestHeader) throws RemotingCommandException {
-
-        final RemotingCommand response = RemotingCommand.createResponseCommand(SendMessageResponseHeader.class);
+    private CompletableFuture<RemotingCommand> asyncSendBatchMessage(ChannelHandlerContext ctx, RemotingCommand request,
+                                                                     SendMessageContext mqtraceContext,
+                                                                     SendMessageRequestHeader requestHeader) {
+        final RemotingCommand response = preSend(ctx, request, requestHeader);
         final SendMessageResponseHeader responseHeader = (SendMessageResponseHeader)response.readCustomHeader();
 
-        response.setOpaque(request.getOpaque());
-
-        response.addExtField(MessageConst.PROPERTY_MSG_REGION, this.brokerController.getBrokerConfig().getRegionId());
-        response.addExtField(MessageConst.PROPERTY_TRACE_SWITCH, String.valueOf(this.brokerController.getBrokerConfig().isTraceOn()));
-
-        log.debug("Receive SendMessage request command {}", request);
-
-        /**
-         * broker开始提供服务
-         */
-        final long startTimstamp = this.brokerController.getBrokerConfig().getStartAcceptSendRequestTimeStamp();
-        if (this.brokerController.getMessageStore().now() < startTimstamp) {
-            response.setCode(ResponseCode.SYSTEM_ERROR);
-            response.setRemark(String.format("broker unable to service, until %s", UtilAll.timeMillisToHumanString2(startTimstamp)));
-            return response;
-        }
-
-        response.setCode(-1);
-        /**
-         * 校验topic  是否顺序  名称是否为默认  已经是否存在  如果不存在是否需要创建并通知nameserver  以及ha
-         */
-        super.msgCheck(ctx, requestHeader, response);
         if (response.getCode() != -1) {
-            return response;
+            return CompletableFuture.completedFuture(response);
         }
 
         /**
@@ -694,7 +729,7 @@ public class SendMessageProcessor extends AbstractSendMessageProcessor implement
          * queueIdInt小于0  则随机选取一个
          */
         if (queueIdInt < 0) {
-            queueIdInt = Math.abs(this.random.nextInt() % 99999999) % topicConfig.getWriteQueueNums();
+            queueIdInt = randomQueueId(topicConfig.getWriteQueueNums());
         }
 
         /**
@@ -703,16 +738,7 @@ public class SendMessageProcessor extends AbstractSendMessageProcessor implement
         if (requestHeader.getTopic().length() > Byte.MAX_VALUE) {
             response.setCode(ResponseCode.MESSAGE_ILLEGAL);
             response.setRemark("message topic length too long " + requestHeader.getTopic().length());
-            return response;
-        }
-
-        /**
-         * 重试topic不能发送批量消息
-         */
-        if (requestHeader.getTopic() != null && requestHeader.getTopic().startsWith(MixAll.RETRY_GROUP_TOPIC_PREFIX)) {
-            response.setCode(ResponseCode.MESSAGE_ILLEGAL);
-            response.setRemark("batch request does not support retry group " + requestHeader.getTopic());
-            return response;
+            return CompletableFuture.completedFuture(response);
         }
 
         /**
@@ -746,10 +772,11 @@ public class SendMessageProcessor extends AbstractSendMessageProcessor implement
          * 存储批量消息
          * 存储批量消息
          */
-        PutMessageResult putMessageResult = this.brokerController.getMessageStore().putMessages(messageExtBatch);
-
-        return handlePutMessageResult(putMessageResult, response, request, messageExtBatch, responseHeader, sendMessageContext, ctx, queueIdInt);
+        CompletableFuture<PutMessageResult> putMessageResult = this.brokerController.getMessageStore().asyncPutMessages(messageExtBatch);
+        return handlePutMessageResultFuture(putMessageResult, response, request, messageExtBatch, responseHeader, mqtraceContext, ctx, queueIdInt);
     }
+
+
 
     public boolean hasConsumeMessageHook() {
         return consumeMessageHookList != null && !this.consumeMessageHookList.isEmpty();
@@ -788,5 +815,50 @@ public class SendMessageProcessor extends AbstractSendMessageProcessor implement
 
     public void registerConsumeMessageHook(List<ConsumeMessageHook> consumeMessageHookList) {
         this.consumeMessageHookList = consumeMessageHookList;
+    }
+
+    static private ConsumeMessageContext buildConsumeMessageContext(String namespace,
+                                                                    ConsumerSendMsgBackRequestHeader requestHeader,
+                                                                    RemotingCommand request) {
+        ConsumeMessageContext context = new ConsumeMessageContext();
+        context.setNamespace(namespace);
+        context.setConsumerGroup(requestHeader.getGroup());
+        context.setTopic(requestHeader.getOriginTopic());
+        context.setCommercialRcvStats(BrokerStatsManager.StatsType.SEND_BACK);
+        context.setCommercialRcvTimes(1);
+        context.setCommercialOwner(request.getExtFields().get(BrokerStatsManager.COMMERCIAL_OWNER));
+        return context;
+    }
+
+    private int randomQueueId(int writeQueueNums) {
+        return (this.random.nextInt() % 99999999) % writeQueueNums;
+    }
+
+    private RemotingCommand preSend(ChannelHandlerContext ctx, RemotingCommand request,
+                                    SendMessageRequestHeader requestHeader) {
+        final RemotingCommand response = RemotingCommand.createResponseCommand(SendMessageResponseHeader.class);
+
+        response.setOpaque(request.getOpaque());
+
+        response.addExtField(MessageConst.PROPERTY_MSG_REGION, this.brokerController.getBrokerConfig().getRegionId());
+        response.addExtField(MessageConst.PROPERTY_TRACE_SWITCH, String.valueOf(this.brokerController.getBrokerConfig().isTraceOn()));
+
+        log.debug("Receive SendMessage request command {}", request);
+
+        final long startTimestamp = this.brokerController.getBrokerConfig().getStartAcceptSendRequestTimeStamp();
+
+        if (this.brokerController.getMessageStore().now() < startTimestamp) {
+            response.setCode(ResponseCode.SYSTEM_ERROR);
+            response.setRemark(String.format("broker unable to service, until %s", UtilAll.timeMillisToHumanString2(startTimestamp)));
+            return response;
+        }
+
+        response.setCode(-1);
+        super.msgCheck(ctx, requestHeader, response);
+        if (response.getCode() != -1) {
+            return response;
+        }
+
+        return response;
     }
 }

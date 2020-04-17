@@ -131,7 +131,8 @@ public class PullAPIWrapper {
                  * 向MessageExt填充MAX_OFFSET
                  */
                 MessageAccessor.putProperty(msg, MessageConst.PROPERTY_MAX_OFFSET,
-                        Long.toString(pullResult.getMaxOffset()));
+                    Long.toString(pullResult.getMaxOffset()));
+                msg.setBrokerName(mq.getBrokerName());
             }
 
             pullResultExt.setMsgFoundList(msgListFilterAgain);
