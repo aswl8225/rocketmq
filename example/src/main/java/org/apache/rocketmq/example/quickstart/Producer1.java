@@ -14,7 +14,7 @@ public class Producer1 {
          */
         DefaultMQProducer producer = new DefaultMQProducer("producerGroup1");
 //        producer.setNamesrvAddr("192.168.50.65:9876");
-        producer.setNamesrvAddr("localhost:9876");
+        producer.setNamesrvAddr("192.168.50.61:9876");
 
         /*
          * Specify name server addresses.
@@ -33,35 +33,36 @@ public class Producer1 {
          */
         producer.start();
 
-        for (int i = 0; i < Integer.MAX_VALUE; i++) {
-            try {
+//        for (int i = 0; i < Integer.MAX_VALUE; i++) {
+//            try {
+//
+//                /*
+//                 * Create a message instance, specifying topic, tag and message body.
+//                 */
+//                Message msg = new Message("DefaultCluster" /* Topic */,
+//                        "tagA" /* Tag */,
+//                        ("Hello RocketMQHello RocketMQHello RocketMQHello RocketMQHello RocketMQHello RocketMQHello RocketMQHello RocketMQHello " +
+////                                "RocketMQHello RocketMQHello RocketMQHello RocketMQHello RocketMQHello RocketMQHello RocketMQHello RocketMQHello" +
+////                                " RocketMQHello RocketMQHello RocketMQHello RocketMQHello RocketMQHello RocketMQHello RocketMQHello RocketMQHello" +
+////                                " RocketMQHello RocketMQHello RocketMQHello RocketMQHello RocketMQHello RocketMQHello RocketMQHello RocketMQHello" +
+//
+//                                "RocketMQHello RocketMQHello RocketMQHello RocketMQHello RocketMQHello RocketMQ " + i).getBytes(RemotingHelper.DEFAULT_CHARSET) /* Message body */
+//                );
+//                msg.setKeys(System.currentTimeMillis()+"");
+//
+//                /*
+//                 * Call send message to deliver message to one of brokers.
+//                 */
+//                SendResult sendResult = producer.send(msg);
+//
+//                System.out.printf("%s%n", sendResult);
+//            } catch (Exception e) {
+//                e.printStackTrace();
+//                Thread.sleep(1000);
+//            }
+//        }
 
-                /*
-                 * Create a message instance, specifying topic, tag and message body.
-                 */
-                Message msg = new Message("DefaultCluster" /* Topic */,
-                        "tagA" /* Tag */,
-                        ("Hello RocketMQHello RocketMQHello RocketMQHello RocketMQHello RocketMQHello RocketMQHello RocketMQHello RocketMQHello " +
-//                                "RocketMQHello RocketMQHello RocketMQHello RocketMQHello RocketMQHello RocketMQHello RocketMQHello RocketMQHello" +
-//                                " RocketMQHello RocketMQHello RocketMQHello RocketMQHello RocketMQHello RocketMQHello RocketMQHello RocketMQHello" +
-//                                " RocketMQHello RocketMQHello RocketMQHello RocketMQHello RocketMQHello RocketMQHello RocketMQHello RocketMQHello" +
-
-                                "RocketMQHello RocketMQHello RocketMQHello RocketMQHello RocketMQHello RocketMQ " + i).getBytes(RemotingHelper.DEFAULT_CHARSET) /* Message body */
-                );
-                msg.setKeys(System.currentTimeMillis()+"");
-
-                /*
-                 * Call send message to deliver message to one of brokers.
-                 */
-                SendResult sendResult = producer.send(msg);
-
-                System.out.printf("%s%n", sendResult);
-            } catch (Exception e) {
-                e.printStackTrace();
-                Thread.sleep(1000);
-            }
-        }
-
+        Thread.sleep(Integer.MAX_VALUE);
         /*
          * Shut down once the producer instance is not longer in use.
          */

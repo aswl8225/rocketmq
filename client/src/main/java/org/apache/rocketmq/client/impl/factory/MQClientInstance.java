@@ -594,6 +594,11 @@ public class MQClientInstance {
         }
     }
 
+    /**
+     * 从namesrv获取topic信息
+     * @param topic
+     * @return
+     */
     public boolean updateTopicRouteInfoFromNameServer(final String topic) {
         return updateTopicRouteInfoFromNameServer(topic, false, null);
     }
@@ -744,6 +749,9 @@ public class MQClientInstance {
                          */
                         boolean changed = topicRouteDataIsChange(old, topicRouteData);
                         if (!changed) {
+                            /**
+                             * 检查是否需要更新
+                             */
                             changed = this.isNeedUpdateTopicRouteInfo(topic);
                         } else {
                             log.info("the topic[{}] route info changed, old[{}] ,new[{}]", topic, old, topicRouteData);
@@ -772,7 +780,7 @@ public class MQClientInstance {
                                     MQProducerInner impl = entry.getValue();
                                     if (impl != null) {
                                         /**
-                                         * 注入topicPublishInfoTable<topic, TopicPublishInfo>
+                                         * 更新topicPublishInfoTable<topic, TopicPublishInfo>
                                          */
                                         impl.updateTopicPublishInfo(topic, publishInfo);
                                     }
@@ -930,6 +938,11 @@ public class MQClientInstance {
 
     }
 
+    /**
+     * 是否需要刷新路由
+     * @param topic
+     * @return
+     */
     private boolean isNeedUpdateTopicRouteInfo(final String topic) {
         boolean result = false;
         {
