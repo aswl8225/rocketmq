@@ -83,7 +83,7 @@ public class NamesrvStartup {
         /**
          * 设置RocketmqHome
          */
-        namesrvConfig.setRocketmqHome("D:\\code\\rocketmq\\distribution");
+        namesrvConfig.setRocketmqHome("/Users/aixinde/code/aswl8225/rocketmq/distribution/");
 
         final NettyServerConfig nettyServerConfig = new NettyServerConfig();
 

@@ -109,6 +109,10 @@ public class ConsumeQueue {
 
     /**
      * 得到当前consumerqueue存储的最大offset  并存储flushedWhere和committedWhere中
+     *
+     * 修改最后一个MappedFile对应的wrotePosition，flushedPosition，commitPosition
+     * 修改mappedFileQueue对应的flushedPosition，commitPosition
+     * 获取当前consumeQueue对应的maxPhysicOffset
      */
     public void recover() {
         /**
@@ -208,6 +212,8 @@ public class ConsumeQueue {
              * 删除脏文件
              * 假设有两个文件  第一个存储的offset在11到20  第二个存储的offset在21到30   而当前传入的processOffset为15
              * 则保留第一个文件（11-20） 删除第2个文件（21-30）
+             *
+             * 修改最后一个MappedFile对应的wrotePosition，flushedPosition，commitPosition
              */
             this.mappedFileQueue.truncateDirtyFiles(processOffset);
 

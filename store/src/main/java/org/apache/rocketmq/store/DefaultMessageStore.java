@@ -1791,6 +1791,7 @@ public class DefaultMessageStore implements MessageStore {
         /**
          * 恢复ConsumeQueue下的文件
          * 遍历每一个文件
+         * 获取对应的commitlog存储消息的最大offset
          */
         long maxPhyOffsetOfConsumeQueue = this.recoverConsumeQueue();
 
@@ -1828,9 +1829,20 @@ public class DefaultMessageStore implements MessageStore {
         }
     }
 
+    /**
+     * 遍历所有的topic下的所有consumeQueue对应的映射文件   获取对应的maxPhysicOffset   以此删除脏数据文件
+     * 并获得commitlog下最大的offset
+     * @return
+     */
     private long recoverConsumeQueue() {
         long maxPhysicOffset = -1;
+        /**
+         * 遍历所有的topic下的所有consumeQueue
+         */
         for (ConcurrentMap<Integer, ConsumeQueue> maps : this.consumeQueueTable.values()) {
+            /**
+             * 遍历consumeQueue下每个queueId
+             */
             for (ConsumeQueue logic : maps.values()) {
                 logic.recover();
                 if (logic.getMaxPhysicOffset() > maxPhysicOffset) {
@@ -1839,6 +1851,9 @@ public class DefaultMessageStore implements MessageStore {
             }
         }
 
+        /**
+         * 并获得commitlog下最大的offset
+         */
         return maxPhysicOffset;
     }
 
