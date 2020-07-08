@@ -40,6 +40,7 @@ import org.apache.rocketmq.common.message.MessageConst;
 import org.apache.rocketmq.common.message.MessageDecoder;
 import org.apache.rocketmq.common.message.MessageExtBatch;
 import org.apache.rocketmq.common.sysflag.MessageSysFlag;
+import org.apache.rocketmq.common.topic.TopicValidator;
 import org.apache.rocketmq.store.AppendMessageResult;
 import org.apache.rocketmq.store.AppendMessageStatus;
 import org.apache.rocketmq.store.CommitLog;
@@ -501,7 +502,7 @@ public class DLedgerCommitLog extends CommitLog {
                 /**
                  * 发送到延迟队列
                  */
-                topic = ScheduleMessageService.SCHEDULE_TOPIC;
+                topic = TopicValidator.RMQ_SYS_SCHEDULE_TOPIC;
                 /**
                  * 对应的延迟队列的queueid  delayLevel-1
                  */

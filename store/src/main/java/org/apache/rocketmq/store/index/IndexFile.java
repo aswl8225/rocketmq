@@ -220,8 +220,10 @@ public class IndexFile {
                 /**
                  * 更新header中的数据
                  */
-                this.indexHeader.incHashSlotCount();//+1
-                this.indexHeader.incIndexCount();//+1
+                if (invalidIndex == slotValue) {
+                    this.indexHeader.incHashSlotCount();
+                }
+                this.indexHeader.incIndexCount();
                 this.indexHeader.setEndPhyOffset(phyOffset);
                 this.indexHeader.setEndTimestamp(storeTimestamp);
 

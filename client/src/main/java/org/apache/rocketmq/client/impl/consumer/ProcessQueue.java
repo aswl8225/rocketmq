@@ -352,7 +352,7 @@ public class ProcessQueue {
         }
     }
 
-    public List<MessageExt> takeMessags(final int batchSize) {
+    public List<MessageExt> takeMessages(final int batchSize) {
         List<MessageExt> result = new ArrayList<MessageExt>(batchSize);
         final long now = System.currentTimeMillis();
         try {
