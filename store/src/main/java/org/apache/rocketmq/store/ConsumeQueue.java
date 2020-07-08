@@ -344,6 +344,11 @@ public class ConsumeQueue {
         return 0;
     }
 
+    /**
+     * 1、删除存储得第一个commitlogoffset大于phyOffet得consumequeue文件
+     * 2、更新最后一个文件对应得wrotePosition CommittedPosition FlushedPosition
+     * @param phyOffet
+     */
     public void truncateDirtyLogicFiles(long phyOffet) {
 
         int logicFileSize = this.mappedFileSize;

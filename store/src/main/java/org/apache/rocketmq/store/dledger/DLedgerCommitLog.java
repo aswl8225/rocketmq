@@ -330,23 +330,40 @@ public class DLedgerCommitLog extends CommitLog {
     }
 
     private void recover(long maxPhyOffsetOfConsumeQueue) {
+        /**
+         * 加载对应得data文件和index文件
+         */
         dLedgerFileStore.load();
         if (dLedgerFileList.getMappedFiles().size() > 0) {
+            /**
+             * 执行dledger得recover
+             */
             dLedgerFileStore.recover();
+            /**
+             * 区分普通存储和dledger存储
+             */
             dividedCommitlogOffset = dLedgerFileList.getFirstMappedFile().getFileFromOffset();
             MappedFile mappedFile = this.mappedFileQueue.getLastMappedFile();
             if (mappedFile != null) {
                 disableDeleteDledger();
             }
+            /**
+             * 获取commitlog存储得最大offset
+             */
             long maxPhyOffset = dLedgerFileList.getMaxWrotePosition();
             // Clear ConsumeQueue redundant data
+            /**
+             * consumerqueue获得commitlog得最大offset  大于 commitlog获得得最大offset
+             */
             if (maxPhyOffsetOfConsumeQueue >= maxPhyOffset) {
                 log.warn("[TruncateCQ]maxPhyOffsetOfConsumeQueue({}) >= processOffset({}), truncate dirty logic files", maxPhyOffsetOfConsumeQueue, maxPhyOffset);
+                //删除冗余文件
                 this.defaultMessageStore.truncateDirtyLogicFiles(maxPhyOffset);
             }
             return;
         }
         //Indicate that, it is the first time to load mixed commitlog, need to recover the old commitlog
+        //表示第一次加载混合提交日志，需要恢复旧的提交日志
         isInrecoveringOldCommitlog = true;
         //No need the abnormal recover
         super.recoverNormally(maxPhyOffsetOfConsumeQueue);

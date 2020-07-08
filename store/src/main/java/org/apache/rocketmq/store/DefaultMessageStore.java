@@ -208,11 +208,22 @@ public class DefaultMessageStore implements MessageStore {
         lockFile = new RandomAccessFile(file, "rw");
     }
 
+    /**
+     * 删除冗余文件
+     * @param phyOffset
+     */
     public void truncateDirtyLogicFiles(long phyOffset) {
+        /**
+         * 遍历所有得consumeQueue
+         */
         ConcurrentMap<String, ConcurrentMap<Integer, ConsumeQueue>> tables = DefaultMessageStore.this.consumeQueueTable;
 
         for (ConcurrentMap<Integer, ConsumeQueue> maps : tables.values()) {
             for (ConsumeQueue logic : maps.values()) {
+                /**
+                 * 1、删除存储得第一个commitlogoffset大于phyOffet得consumequeue文件
+                 * 2、更新最后一个文件对应得wrotePosition CommittedPosition FlushedPosition
+                 */
                 logic.truncateDirtyLogicFiles(phyOffset);
             }
         }
