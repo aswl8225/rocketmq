@@ -270,7 +270,6 @@ public class BrokerController {
                  * 实例化DefaultMessageStore
                  */
                 this.messageStore =
-
                     new DefaultMessageStore(this.messageStoreConfig, this.brokerStatsManager, this.messageArrivingListener,
                         this.brokerConfig);
                 /**
@@ -507,6 +506,9 @@ public class BrokerController {
                 }, 1000 * 10, 1000 * 60 * 2, TimeUnit.MILLISECONDS);
             }
 
+            /**
+             * 不支持dledger
+             */
             if (!messageStoreConfig.isEnableDLegerCommitLog()) {
                 if (BrokerRole.SLAVE == this.messageStoreConfig.getBrokerRole()) {
                     if (this.messageStoreConfig.getHaMasterAddress() != null && this.messageStoreConfig.getHaMasterAddress().length() >= 6) {
@@ -528,6 +530,7 @@ public class BrokerController {
                     }, 1000 * 10, 1000 * 60, TimeUnit.MILLISECONDS);
                 }
             }
+
             /**
              * tls默认permissive    ???????
              */

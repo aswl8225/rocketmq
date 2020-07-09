@@ -105,7 +105,6 @@ public class CommitLog {
      * 若是非事务消息或者commit事务消息，可以通过这个值查找到consumeQueue中数据，QUEUEOFFSET * 20才是偏移地址；
      * 若是PREPARED或者Rollback事务，则可以通过该值从tranStateTable中查找数据
      */
-
     protected HashMap<String/* topic-queueid */, Long/* offset */> topicQueueTable = new HashMap<String, Long>(1024);
     protected volatile long confirmOffset = -1L;
 
@@ -339,6 +338,7 @@ public class CommitLog {
             // Clear ConsumeQueue redundant data
             if (maxPhyOffsetOfConsumeQueue >= processOffset) {
                 log.warn("maxPhyOffsetOfConsumeQueue({}) >= processOffset({}), truncate dirty logic files", maxPhyOffsetOfConsumeQueue, processOffset);
+                //删除consumeQueue冗余文件
                 this.defaultMessageStore.truncateDirtyLogicFiles(processOffset);
             }
         } else {
@@ -346,6 +346,7 @@ public class CommitLog {
             log.warn("The commitlog files are deleted, and delete the consume queue files");
             this.mappedFileQueue.setFlushedWhere(0);
             this.mappedFileQueue.setCommittedWhere(0);
+            //删除consumeQueue所有文件
             this.defaultMessageStore.destroyLogics();
         }
     }

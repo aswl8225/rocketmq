@@ -57,6 +57,19 @@ import org.apache.rocketmq.store.schedule.ScheduleMessageService;
 /**
  * Store all metadata downtime for recovery, data protection reliability
  */
+
+/**
+ * magic              4     模
+ * size               4     消息大小
+ * index              8     存储消息顺序
+ * term               8     raft选举周期
+ * pos                8     offset
+ * channel            4
+ * chainCrc           4
+ * bodyCrc            4
+ * bodyLength         4     消息体大小
+ * body               ?     消息体内容-commitLog
+ */
 public class DLedgerCommitLog extends CommitLog {
     private final DLedgerServer dLedgerServer;
     private final DLedgerConfig dLedgerConfig;
@@ -125,6 +138,9 @@ public class DLedgerCommitLog extends CommitLog {
 
     @Override
     public void start() {
+        /**
+         * dLedgerServer启动
+         */
         dLedgerServer.startup();
     }
 
@@ -168,6 +184,7 @@ public class DLedgerCommitLog extends CommitLog {
         if (!mappedFileQueue.getMappedFiles().isEmpty()) {
             return mappedFileQueue.getMinOffset();
         }
+        //FileFromOffset + StartPosition
         return dLedgerFileList.getMinOffset();
     }
 
@@ -357,7 +374,7 @@ public class DLedgerCommitLog extends CommitLog {
              */
             if (maxPhyOffsetOfConsumeQueue >= maxPhyOffset) {
                 log.warn("[TruncateCQ]maxPhyOffsetOfConsumeQueue({}) >= processOffset({}), truncate dirty logic files", maxPhyOffsetOfConsumeQueue, maxPhyOffset);
-                //删除冗余文件
+                //删除consumerqueue中得冗余文件
                 this.defaultMessageStore.truncateDirtyLogicFiles(maxPhyOffset);
             }
             return;
@@ -366,7 +383,13 @@ public class DLedgerCommitLog extends CommitLog {
         //表示第一次加载混合提交日志，需要恢复旧的提交日志
         isInrecoveringOldCommitlog = true;
         //No need the abnormal recover
+        /**
+         * commitLog的recoverNormally
+         */
         super.recoverNormally(maxPhyOffsetOfConsumeQueue);
+        /**
+         * 以dledger模式运行
+         */
         isInrecoveringOldCommitlog = false;
         MappedFile mappedFile = this.mappedFileQueue.getLastMappedFile();
         if (mappedFile == null) {

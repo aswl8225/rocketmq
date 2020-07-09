@@ -209,7 +209,7 @@ public class DefaultMessageStore implements MessageStore {
     }
 
     /**
-     * 删除冗余文件
+     * 删除consumeQueue冗余文件
      * @param phyOffset
      */
     public void truncateDirtyLogicFiles(long phyOffset) {
@@ -359,9 +359,13 @@ public class DefaultMessageStore implements MessageStore {
             }
             log.info("[SetReputOffset] maxPhysicalPosInLogicQueue={} clMinOffset={} clMaxOffset={} clConfirmedOffset={}",
                 maxPhysicalPosInLogicQueue, this.commitLog.getMinOffset(), this.commitLog.getMaxOffset(), this.commitLog.getConfirmOffset());
+
+            /**
+             * 设置reputFromOffset
+             */
             this.reputMessageService.setReputFromOffset(maxPhysicalPosInLogicQueue);
             /**
-             * reput
+             * 执行reput
              */
             this.reputMessageService.start();
 
@@ -382,6 +386,9 @@ public class DefaultMessageStore implements MessageStore {
             this.recoverTopicQueueTable();
         }
 
+        /**
+         * 非dledger模式  则执行ha操作
+         */
         if (!messageStoreConfig.isEnableDLegerCommitLog()) {
             this.haService.start();
             this.handleScheduleMessageService(messageStoreConfig.getBrokerRole());
@@ -395,6 +402,10 @@ public class DefaultMessageStore implements MessageStore {
          * 如果是commitlog模式  刷盘（分异步或同步）  如果isTransientStorePoolEnable，执行commit操作   写入FileChannel
          */
         this.commitLog.start();
+
+        /**
+         * 数据统计    ？？？？？
+         */
         this.storeStatsService.start();
 
         /**
@@ -1881,6 +1892,9 @@ public class DefaultMessageStore implements MessageStore {
         return maxPhysicOffset;
     }
 
+    /**
+     * 更新commitLog对应得topicQueueTable
+     */
     public void recoverTopicQueueTable() {
         HashMap<String/* topic-queueid */, Long/* offset */> table = new HashMap<String, Long>(1024);
 
@@ -1893,7 +1907,7 @@ public class DefaultMessageStore implements MessageStore {
                 String key = logic.getTopic() + "-" + logic.getQueueId();
 
                 /**
-                 * 在consumeQueue中的最大相对位置   MaxOffset / CQ_STORE_UNIT_SIZE
+                 * 在consumeQueue中的消息个数   MaxOffset / CQ_STORE_UNIT_SIZE
                  */
                 table.put(key, logic.getMaxOffsetInQueue());
 
@@ -1906,6 +1920,9 @@ public class DefaultMessageStore implements MessageStore {
             }
         }
 
+        /**
+         * 更新topicQueueTable
+         */
         this.commitLog.setTopicQueueTable(table);
     }
 
