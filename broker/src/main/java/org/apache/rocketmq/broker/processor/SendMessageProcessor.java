@@ -340,10 +340,20 @@ public class SendMessageProcessor extends AbstractSendMessageProcessor implement
         });
     }
 
-
+    /**
+     * 存储单个消息
+     * @param ctx
+     * @param request
+     * @param mqtraceContext
+     * @param requestHeader
+     * @return
+     */
     private CompletableFuture<RemotingCommand> asyncSendMessage(ChannelHandlerContext ctx, RemotingCommand request,
                                                                 SendMessageContext mqtraceContext,
                                                                 SendMessageRequestHeader requestHeader) {
+        /**
+         *
+         */
         final RemotingCommand response = preSend(ctx, request, requestHeader);
         final SendMessageResponseHeader responseHeader = (SendMessageResponseHeader)response.readCustomHeader();
 
@@ -708,10 +718,9 @@ public class SendMessageProcessor extends AbstractSendMessageProcessor implement
      * 处理producer发送的批量消息
      * @param ctx
      * @param request
-     * @param sendMessageContext
+     * @param mqtraceContext
      * @param requestHeader
      * @return
-     * @throws RemotingCommandException
      */
     private CompletableFuture<RemotingCommand> asyncSendBatchMessage(ChannelHandlerContext ctx, RemotingCommand request,
                                                                      SendMessageContext mqtraceContext,
@@ -838,6 +847,13 @@ public class SendMessageProcessor extends AbstractSendMessageProcessor implement
         return (this.random.nextInt() % 99999999) % writeQueueNums;
     }
 
+    /**
+     *
+     * @param ctx
+     * @param request
+     * @param requestHeader
+     * @return
+     */
     private RemotingCommand preSend(ChannelHandlerContext ctx, RemotingCommand request,
                                     SendMessageRequestHeader requestHeader) {
         final RemotingCommand response = RemotingCommand.createResponseCommand(SendMessageResponseHeader.class);
@@ -851,6 +867,9 @@ public class SendMessageProcessor extends AbstractSendMessageProcessor implement
 
         final long startTimestamp = this.brokerController.getBrokerConfig().getStartAcceptSendRequestTimeStamp();
 
+        /**
+         * 时间不错误
+         */
         if (this.brokerController.getMessageStore().now() < startTimestamp) {
             response.setCode(ResponseCode.SYSTEM_ERROR);
             response.setRemark(String.format("broker unable to service, until %s", UtilAll.timeMillisToHumanString2(startTimestamp)));
@@ -858,6 +877,9 @@ public class SendMessageProcessor extends AbstractSendMessageProcessor implement
         }
 
         response.setCode(-1);
+        /**
+         *
+         */
         super.msgCheck(ctx, requestHeader, response);
         if (response.getCode() != -1) {
             return response;

@@ -72,20 +72,26 @@ public class TopicValidator {
         return matcher.matches();
     }
 
+    /**
+     * 校验topic
+     * @param topic
+     * @param response
+     * @return
+     */
     public static boolean validateTopic(String topic, RemotingCommand response) {
-
+        //topic为空
         if (UtilAll.isBlank(topic)) {
             response.setCode(ResponseCode.SYSTEM_ERROR);
             response.setRemark("The specified topic is blank.");
             return false;
         }
-
+        //topic命名不规范
         if (!regularExpressionMatcher(topic, PATTERN)) {
             response.setCode(ResponseCode.SYSTEM_ERROR);
             response.setRemark("The specified topic contains illegal characters, allowing only " + VALID_PATTERN_STR);
             return false;
         }
-
+        //名称过长
         if (topic.length() > TOPIC_MAX_LENGTH) {
             response.setCode(ResponseCode.SYSTEM_ERROR);
             response.setRemark("The specified topic is longer than topic max length.");
@@ -112,7 +118,16 @@ public class TopicValidator {
         return NOT_ALLOWED_SEND_TOPIC_SET.contains(topic);
     }
 
+    /**
+     * topic是否允许写入消息
+     * @param topic
+     * @param response
+     * @return
+     */
     public static boolean isNotAllowedSendTopic(String topic, RemotingCommand response) {
+        /**
+         * 不允许写入消息
+         */
         if (isNotAllowedSendTopic(topic)) {
             response.setCode(ResponseCode.NO_PERMISSION);
             response.setRemark("Sending message to topic[" + topic + "] is forbidden.");

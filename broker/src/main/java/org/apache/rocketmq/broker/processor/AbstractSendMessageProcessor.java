@@ -179,9 +179,15 @@ public abstract class AbstractSendMessageProcessor extends AsyncNettyRequestProc
             return response;
         }
 
+        /**
+         * 校验topic
+         */
         if (!TopicValidator.validateTopic(requestHeader.getTopic(), response)) {
             return response;
         }
+        /**
+         * topic是否允许写入消息
+         */
         if (TopicValidator.isNotAllowedSendTopic(requestHeader.getTopic(), response)) {
             return response;
         }
