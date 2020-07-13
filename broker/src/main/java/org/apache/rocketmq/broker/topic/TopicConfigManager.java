@@ -175,6 +175,9 @@ public class TopicConfigManager extends ConfigManager {
         try {
             if (this.lockTopicConfigTable.tryLock(LOCK_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS)) {
                 try {
+                    /**
+                     * topic不存在
+                     */
                     topicConfig = this.topicConfigTable.get(topic);
                     if (topicConfig != null)
                         return topicConfig;
@@ -188,12 +191,12 @@ public class TopicConfigManager extends ConfigManager {
                          * defaultTopic得值为TBW102
                          */
                         if (defaultTopic.equals(TopicValidator.AUTO_CREATE_TOPIC_KEY_TOPIC)) {
+                            /**
+                             * 不允许自动创建topic
+                             */
                             if (!this.brokerController.getBrokerConfig().isAutoCreateTopicEnable()) {
                                 /**
                                  * 修改权限  只拥有读写权限  但没有PERM_INHERIT权限
-                                 */
-                                /**
-                                 * 不允许自动创建topic
                                  */
                                 defaultTopicConfig.setPerm(PermName.PERM_READ | PermName.PERM_WRITE);
                             }
