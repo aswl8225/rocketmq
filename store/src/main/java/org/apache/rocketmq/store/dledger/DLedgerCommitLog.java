@@ -616,8 +616,14 @@ public class DLedgerCommitLog extends CommitLog {
             int msgIdLength = (msg.getSysFlag() & MessageSysFlag.STOREHOSTADDRESS_V6_FLAG) == 0 ? 4 + 4 + 8 : 16 + 4 + 8;
             ByteBuffer buffer = ByteBuffer.allocate(msgIdLength);
 
+            /**
+             * 计算messageId
+             */
             String msgId = MessageDecoder.createMessageId(buffer, msg.getStoreHostBytes(), wroteOffset);
             elapsedTimeInLock = this.defaultMessageStore.getSystemClock().now() - beginTimeInDledgerLock;
+            /**
+             * 响应对象
+             */
             appendResult = new AppendMessageResult(AppendMessageStatus.PUT_OK, wroteOffset, encodeResult.data.length, msgId, System.currentTimeMillis(), queueOffset, elapsedTimeInLock);
             switch (tranType) {
                 case MessageSysFlag.TRANSACTION_PREPARED_TYPE:
@@ -648,6 +654,9 @@ public class DLedgerCommitLog extends CommitLog {
 
         PutMessageStatus putMessageStatus = PutMessageStatus.UNKNOWN_ERROR;
         try {
+            /**
+             * append操作结果
+             */
             AppendEntryResponse appendEntryResponse = dledgerFuture.get(3, TimeUnit.SECONDS);
             switch (DLedgerResponseCode.valueOf(appendEntryResponse.getCode())) {
                 case SUCCESS:
@@ -687,9 +696,8 @@ public class DLedgerCommitLog extends CommitLog {
 
 
     /**
-     * 获取从offset开始  长度为size的消息
-     * @param offset
-     * @param size
+     * 消息存储
+     * @param msg
      * @return
      */
     @Override
