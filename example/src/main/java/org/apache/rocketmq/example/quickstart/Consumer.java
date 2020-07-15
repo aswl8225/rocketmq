@@ -37,7 +37,7 @@ public class Consumer {
          */
         DefaultMQPushConsumer consumer = new DefaultMQPushConsumer("consumerGroup1");
 //        consumer.setNamesrvAddr("47.98.130.29:9876");
-        consumer.setNamesrvAddr("192.168.50.65:9876");
+        consumer.setNamesrvAddr("192.168.50.61:9876");
         consumer.setInstanceName("test1");
 
         /*

@@ -686,7 +686,13 @@ public class DefaultMQProducerImpl implements MQProducerInner {
                             case ONEWAY:
                                 return null;
                             case SYNC:
+                                /**
+                                 * 发送消息失败
+                                 */
                                 if (sendResult.getSendStatus() != SendStatus.SEND_OK) {
+                                    /**
+                                     * 允许切换broker
+                                     */
                                     if (this.defaultMQProducer.isRetryAnotherBrokerWhenNotStoreOK()) {
                                         continue;
                                     }

@@ -1011,8 +1011,16 @@ public class DefaultMQPushConsumerImpl implements MQConsumerInner {
         }
     }
 
+    /**
+     * 处理订阅关系
+     * 集群模式下  需要订阅重试队列
+     * @throws MQClientException
+     */
     private void copySubscription() throws MQClientException {
         try {
+            /**
+             * 将defaultMQPushConsumer内的订阅关系复制到rebalanceImpl中
+             */
             Map<String, String> sub = this.defaultMQPushConsumer.getSubscription();
             if (sub != null) {
                 for (final Map.Entry<String, String> entry : sub.entrySet()) {
@@ -1072,6 +1080,12 @@ public class DefaultMQPushConsumerImpl implements MQConsumerInner {
         return this.rebalanceImpl.getSubscriptionInner();
     }
 
+    /**
+     * 订阅   实际放入rebalanceImpl中
+     * @param topic
+     * @param subExpression
+     * @throws MQClientException
+     */
     public void subscribe(String topic, String subExpression) throws MQClientException {
         try {
             SubscriptionData subscriptionData = FilterAPI.buildSubscriptionData(this.defaultMQPushConsumer.getConsumerGroup(),
