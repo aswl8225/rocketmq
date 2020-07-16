@@ -228,11 +228,26 @@ public class MQClientInstance {
         return info;
     }
 
+    /**
+     * 获取topic对应得MessageQueue集合
+     * @param topic
+     * @param route
+     * @return
+     */
     public static Set<MessageQueue> topicRouteData2TopicSubscribeInfo(final String topic, final TopicRouteData route) {
         Set<MessageQueue> mqList = new HashSet<MessageQueue>();
+        /**
+         * topic对应得borker
+         */
         List<QueueData> qds = route.getQueueDatas();
         for (QueueData qd : qds) {
+            /**
+             * 是否可读
+             */
             if (PermName.isReadable(qd.getPerm())) {
+                /**
+                 * 轮询readQueueNums获取可读得MessageQueue
+                 */
                 for (int i = 0; i < qd.getReadQueueNums(); i++) {
                     MessageQueue mq = new MessageQueue(topic, qd.getBrokerName(), i);
                     mqList.add(mq);
@@ -542,7 +557,7 @@ public class MQClientInstance {
         if (this.lockHeartbeat.tryLock()) {
             try {
                 /**
-                 * 向所有的Broker发送心跳
+                 * 向所有的Broker发送心跳  如果broker感知consumer发生变化或者consumer订阅得topic发生变化  则会通知对应得消费组内所有得consumer  执行负载均衡
                  */
                 this.sendHeartbeatToAllBroker();
 
@@ -618,6 +633,9 @@ public class MQClientInstance {
             List<BrokerData> bds = topicRouteData.getBrokerDatas();
             for (BrokerData bd : bds) {
                 if (bd.getBrokerAddrs() != null) {
+                    /**
+                     * 最新得topic对应broker地址是否包含addr
+                     */
                     boolean exist = bd.getBrokerAddrs().containsValue(addr);
                     if (exist)
                         return true;
@@ -628,7 +646,13 @@ public class MQClientInstance {
         return false;
     }
 
+    /**
+     * 发送心跳
+     */
     private void sendHeartbeatToAllBroker() {
+        /**
+         * 取当前应用对应得producer和consumer信息
+         */
         final HeartbeatData heartbeatData = this.prepareHeartbeatData();
         final boolean producerEmpty = heartbeatData.getProducerDataSet().isEmpty();
         final boolean consumerEmpty = heartbeatData.getConsumerDataSet().isEmpty();
@@ -790,6 +814,9 @@ public class MQClientInstance {
 
                             // Update sub info
                             {
+                                /**
+                                 * 获取订阅信息对应得MessageQueue集合
+                                 */
                                 Set<MessageQueue> subscribeInfo = topicRouteData2TopicSubscribeInfo(topic, topicRouteData);
                                 Iterator<Entry<String, MQConsumerInner>> it = this.consumerTable.entrySet().iterator();
                                 while (it.hasNext()) {
@@ -797,7 +824,7 @@ public class MQClientInstance {
                                     MQConsumerInner impl = entry.getValue();
                                     if (impl != null) {
                                         /**
-                                         * 缓存到topicSubscribeInfoTable中
+                                         * 更新topic对应得MessageQueue集合
                                          */
                                         impl.updateTopicSubscribeInfo(topic, subscribeInfo);
                                     }
@@ -830,6 +857,10 @@ public class MQClientInstance {
         return false;
     }
 
+    /**
+     * 获取当前应用对应得producer和consumer信息
+     * @return
+     */
     private HeartbeatData prepareHeartbeatData() {
         HeartbeatData heartbeatData = new HeartbeatData();
 
@@ -837,6 +868,17 @@ public class MQClientInstance {
         heartbeatData.setClientID(this.clientId);
 
         // Consumer
+        /**
+         * HeartbeatData [clientID=192.168.50.39@test1,
+         *                producerDataSet=[ProducerData [groupName=CLIENT_INNER_PRODUCER]],
+         *                consumerDataSet=[ConsumerData [groupName=consumerGroup7,
+         *                  consumeType=CONSUME_PASSIVELY,
+         *                  messageModel=CLUSTERING,
+         *                  consumeFromWhere=CONSUME_FROM_LAST_OFFSET,
+         *                  unitMode=false,
+         *                  subscriptionDataSet=[SubscriptionData [classFilterMode=false, topic=DefaultCluster, subString=*, tagsSet=[], codeSet=[], subVersion=1594878808064, expressionType=TAG],
+         *                                      SubscriptionData [classFilterMode=false, topic=%RETRY%consumerGroup7, subString=*, tagsSet=[], codeSet=[], subVersion=1594878808121, expressionType=TAG]]]]]
+         */
         for (Map.Entry<String, MQConsumerInner> entry : this.consumerTable.entrySet()) {
             MQConsumerInner impl = entry.getValue();
             if (impl != null) {
@@ -853,6 +895,12 @@ public class MQClientInstance {
         }
 
         // Producer
+        /**
+         * HeartbeatData [clientID=192.168.50.39@5324,
+         *      producerDataSet=[ProducerData [groupName=producerGroup1],
+         *                      ProducerData [groupName=CLIENT_INNER_PRODUCER]],
+         *      consumerDataSet=[]]
+         */
         for (Map.Entry<String/* group */, MQProducerInner> entry : this.producerTable.entrySet()) {
             MQProducerInner impl = entry.getValue();
             if (impl != null) {
