@@ -84,7 +84,7 @@ public class PullMessageService extends ServiceThread {
     private void pullMessage(final PullRequest pullRequest) {
         /**
          * 得到消费者实例
-         * 消费组下有多个消费者   但由于分机部署  同一个启动程序中不会存在其他的消费实例
+         * 消费组下有多个消费者   但由于分机部署  同一个启动程序中不会存在其他的组内消费实例
          */
         final MQConsumerInner consumer = this.mQClientFactory.selectConsumer(pullRequest.getConsumerGroup());
         if (consumer != null) {

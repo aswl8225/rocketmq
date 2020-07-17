@@ -59,6 +59,9 @@ public class RebalancePushImpl extends RebalanceImpl {
         subscriptionData.setSubVersion(newVersion);
 
         int currentQueueCount = this.processQueueTable.size();
+        /**
+         * 更新consumer端流控数据
+         */
         if (currentQueueCount != 0) {
             int pullThresholdForTopic = this.defaultMQPushConsumerImpl.getDefaultMQPushConsumer().getPullThresholdForTopic();
             if (pullThresholdForTopic != -1) {

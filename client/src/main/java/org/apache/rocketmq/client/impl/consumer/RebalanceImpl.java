@@ -386,6 +386,9 @@ public abstract class RebalanceImpl {
             ProcessQueue pq = next.getValue();
 
             if (mq.getTopic().equals(topic)) {
+                /**
+                 * 不再监听mq
+                 */
                 if (!mqSet.contains(mq)) {
                     pq.setDropped(true);
                     /**

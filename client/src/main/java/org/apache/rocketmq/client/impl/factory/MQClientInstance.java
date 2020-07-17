@@ -1272,11 +1272,18 @@ public class MQClientInstance {
          */
         HashMap<Long/* brokerId */, String/* address */> map = this.brokerAddrTable.get(brokerName);
         if (map != null && !map.isEmpty()) {
+            //brokerId对应得地址
             brokerAddr = map.get(brokerId);
             slave = brokerId != MixAll.MASTER_ID;
             found = brokerAddr != null;
 
+            /**
+             * 没发现并且可以更换broker
+             */
             if (!found && !onlyThisBroker) {
+                /**
+                 * 获取第一个地址
+                 */
                 Entry<Long, String> entry = map.entrySet().iterator().next();
                 brokerAddr = entry.getValue();
                 slave = entry.getKey() != MixAll.MASTER_ID;
@@ -1311,6 +1318,9 @@ public class MQClientInstance {
              * 更新路由信息
              */
             this.updateTopicRouteInfoFromNameServer(topic);
+            /**
+             * 获取broker地址
+             */
             brokerAddr = this.findBrokerAddrByTopic(topic);
         }
 
@@ -1328,6 +1338,11 @@ public class MQClientInstance {
         return null;
     }
 
+    /**
+     * 获取topic对应得broker地址  master优先
+     * @param topic
+     * @return
+     */
     public String findBrokerAddrByTopic(final String topic) {
         /**
          * 获取topic路由数据

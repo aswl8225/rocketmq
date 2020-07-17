@@ -262,7 +262,7 @@ public class PullMessageProcessor extends AsyncNettyRequestProcessor implements 
         }
 
         /**
-         * TagType不合法
+         * TagType不合法  并且broker不支持enablePropertyFilter
          */
         if (!ExpressionType.isTagType(subscriptionData.getExpressionType())
             && !this.brokerController.getBrokerConfig().isEnablePropertyFilter()) {

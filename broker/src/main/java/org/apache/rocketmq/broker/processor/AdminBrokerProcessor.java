@@ -168,10 +168,10 @@ public class AdminBrokerProcessor extends AsyncNettyRequestProcessor implements 
              */
             case RequestCode.SEARCH_OFFSET_BY_TIMESTAMP:
                 return this.searchOffsetByTimestamp(ctx, request);
-            /**
-             * 获得当前consumequeue下得最大消费进度
-             */
             case RequestCode.GET_MAX_OFFSET:
+                /**
+                 * 获得当前consumequeue下得最大消费进度
+                 */
                 return this.getMaxOffset(ctx, request);
             case RequestCode.GET_MIN_OFFSET:
                 return this.getMinOffset(ctx, request);
