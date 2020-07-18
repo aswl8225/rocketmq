@@ -1612,7 +1612,7 @@ public class DefaultMessageStore implements MessageStore {
         long nextOffset = oldOffset;
 
         /**
-         * 非slave
+         * 非slave  或   offsetCheckInSlave为true
          */
         if (this.getMessageStoreConfig().getBrokerRole() != BrokerRole.SLAVE || this.getMessageStoreConfig().isOffsetCheckInSlave()) {
             nextOffset = newOffset;

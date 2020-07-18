@@ -33,6 +33,7 @@ public class PullMessageRequestHeader implements CommandCustomHeader {
     @CFNotNull
     private Integer queueId;
     @CFNotNull
+    //broker记录的消费进度
     private Long queueOffset;
     @CFNotNull
     private Integer maxMsgNums;
@@ -40,6 +41,7 @@ public class PullMessageRequestHeader implements CommandCustomHeader {
     private Integer sysFlag;
     @CFNotNull
     private Long commitOffset;
+    //本地缓存的消费进度
     @CFNotNull
     private Long suspendTimeoutMillis;
     @CFNullable
