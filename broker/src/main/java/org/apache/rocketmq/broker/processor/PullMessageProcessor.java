@@ -141,6 +141,9 @@ public class PullMessageProcessor extends AsyncNettyRequestProcessor implements 
         final boolean hasCommitOffsetFlag = PullSysFlag.hasCommitOffsetFlag(requestHeader.getSysFlag());
         final boolean hasSubscriptionFlag = PullSysFlag.hasSubscriptionFlag(requestHeader.getSysFlag());
 
+        /**
+         * 客户端指定得Suspend超时时间
+         */
         final long suspendTimeoutMillisLong = hasSuspendFlag ? requestHeader.getSuspendTimeoutMillis() : 0;
 
         /**
@@ -516,6 +519,9 @@ public class PullMessageProcessor extends AsyncNettyRequestProcessor implements 
                      */
                     if (brokerAllowSuspend && hasSuspendFlag) {
                         long pollingTimeMills = suspendTimeoutMillisLong;
+                        /**
+                         * broker不允许长轮询  则变更pollingTimeMills  减少为一秒
+                         */
                         if (!this.brokerController.getBrokerConfig().isLongPollingEnable()) {
                             pollingTimeMills = this.brokerController.getBrokerConfig().getShortPollingTimeMills();
                         }
