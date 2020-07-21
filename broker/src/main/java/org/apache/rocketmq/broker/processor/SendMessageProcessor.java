@@ -932,7 +932,7 @@ public class SendMessageProcessor extends AbstractSendMessageProcessor implement
 
         response.setCode(-1);
         /**
-         * 校验topic
+         * 校验topic  没有则创建
          */
         super.msgCheck(ctx, requestHeader, response);
         if (response.getCode() != -1) {

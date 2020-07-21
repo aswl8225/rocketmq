@@ -2071,7 +2071,8 @@ public class DefaultMessageStore implements MessageStore {
                 case MessageSysFlag.TRANSACTION_NOT_TYPE:
                 case MessageSysFlag.TRANSACTION_COMMIT_TYPE:
                     /**
-                     * 消息在commitlog有写入  但是在consumerqueue中没有写入   则将消息写入到consumequeue中   并不断更新checkpoint对应的logicsMsgTimestamp
+                     * 消息在commitlog有写入  但是在consumerqueue中没有写入
+                     * 则将消息写入到consumequeue中   并不断更新checkpoint对应的logicsMsgTimestamp
                      */
                     DefaultMessageStore.this.putMessagePositionInfo(request);
                     break;
@@ -2471,7 +2472,9 @@ public class DefaultMessageStore implements MessageStore {
         }
 
         private void doReput() {
-
+            /**
+             * reputFromOffset小于commitLog得最小offset
+             */
             if (this.reputFromOffset < DefaultMessageStore.this.commitLog.getMinOffset()) {
                 log.warn("The reputFromOffset={} is smaller than minPyOffset={}, this usually indicate that the dispatch behind too much and the commitlog has expired.",
                     this.reputFromOffset, DefaultMessageStore.this.commitLog.getMinOffset());

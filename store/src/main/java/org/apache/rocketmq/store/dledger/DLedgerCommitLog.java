@@ -452,6 +452,7 @@ public class DLedgerCommitLog extends CommitLog {
             int magic = byteBuffer.getInt();
             //In dledger, this field is size, it must be gt 0, so it could prevent collision
             /**
+             * magicOld为byteBuffer得第2个int范围
              * 如果是dledger  magicOld应该是消息的size   如果是非dledger   magicOld应该对应的magic属性（参考commitlog存储结构）
              */
             int magicOld = byteBuffer.getInt();
@@ -480,7 +481,7 @@ public class DLedgerCommitLog extends CommitLog {
             DispatchRequest dispatchRequest = super.checkMessageAndReturnSize(byteBuffer, checkCRC, readBody);
 
             /**
-             * 因为是dledger   所以在这里需要加上dledger数据的长度才是真正的消息提
+             * 因为是dledger   所以在这里需要加上dledger数据的长度才是真正的消息体
              */
             if (dispatchRequest.isSuccess()) {
                 dispatchRequest.setBufferSize(dispatchRequest.getMsgSize() + bodyOffset);
@@ -540,7 +541,7 @@ public class DLedgerCommitLog extends CommitLog {
                 }
 
                 /**
-                 * 发送到延迟队列
+                 * 发送到延迟队列  SCHEDULE_TOPIC_XXXX
                  */
                 topic = TopicValidator.RMQ_SYS_SCHEDULE_TOPIC;
                 /**
