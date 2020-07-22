@@ -272,14 +272,14 @@ public class IndexService {
             String keys = msg.getKeys();
             /**
              * msg对应得offset小于indexFile已经写入得最后一个消息得offset
-             * 即CommitLogOffset处已经有数据写入
+             * 即CommitLogOffset处数据已经写入index文件
              */
             if (msg.getCommitLogOffset() < endPhyOffset) {
                 return;
             }
 
             /**
-             * 查看SysFlag是否为TRANSACTION_ROLLBACK_TYPE
+             * 查看SysFlag是否为TRANSACTION_ROLLBACK_TYPE   否则写入index文件   是则跳过不写入
              */
             final int tranType = MessageSysFlag.getTransactionValue(msg.getSysFlag());
             switch (tranType) {
