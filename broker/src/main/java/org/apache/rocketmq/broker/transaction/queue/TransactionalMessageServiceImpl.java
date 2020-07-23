@@ -225,6 +225,7 @@ public class TransactionalMessageServiceImpl implements TransactionalMessageServ
                 /**
                  * 待处理的
                  * RMQ_SYS_TRANS_OP_HALF_TOPIC中的消息存储的offset大于等于halfOffset
+                 * key:halfOffset, value: opOffset.
                  */
                 HashMap<Long, Long> removeMap = new HashMap<>();
 
@@ -292,7 +293,7 @@ public class TransactionalMessageServiceImpl implements TransactionalMessageServ
                          */
                         if (needDiscard(msgExt, transactionCheckMax) || needSkip(msgExt)) {
                             /**
-                             * 日志输出  丢弃消息
+                             * 将消息写入ANS_CHECK_MAX_TIME_TOPIC
                              */
                             listener.resolveDiscardMsg(msgExt);
                             newOffset = i + 1;

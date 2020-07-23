@@ -38,7 +38,7 @@ public class DefaultTransactionalMessageCheckListener extends AbstractTransactio
     }
 
     /**
-     * 日志输出  丢弃消息
+     * 日志输出  将消息写入ANS_CHECK_MAX_TIME_TOPIC
      * @param msgExt Message to be discarded.
      */
     @Override
@@ -46,7 +46,13 @@ public class DefaultTransactionalMessageCheckListener extends AbstractTransactio
         log.error("MsgExt:{} has been checked too many times, so discard it by moving it to system topic TRANS_CHECK_MAXTIME_TOPIC", msgExt);
 
         try {
+            /**
+             * copy新消息   topic为RANS_CHECK_MAX_TIME_TOPIC
+             */
             MessageExtBrokerInner brokerInner = toMessageExtBrokerInner(msgExt);
+            /**
+             * 写入消息
+             */
             PutMessageResult putMessageResult = this.getBrokerController().getMessageStore().putMessage(brokerInner);
             if (putMessageResult != null && putMessageResult.getPutMessageStatus() == PutMessageStatus.PUT_OK) {
                 log.info("Put checked-too-many-time half message to TRANS_CHECK_MAXTIME_TOPIC OK. Restored in queueOffset={}, " +
@@ -60,7 +66,15 @@ public class DefaultTransactionalMessageCheckListener extends AbstractTransactio
 
     }
 
+    /**
+     * copy新消息   topic为RANS_CHECK_MAX_TIME_TOPIC
+     * @param msgExt
+     * @return
+     */
     private MessageExtBrokerInner toMessageExtBrokerInner(MessageExt msgExt) {
+        /**
+         * 创建TRANS_CHECK_MAX_TIME_TOPIC
+         */
         TopicConfig topicConfig = this.getBrokerController().getTopicConfigManager().createTopicOfTranCheckMaxTime(TCMT_QUEUE_NUMS, PermName.PERM_READ | PermName.PERM_WRITE);
         int queueId = Math.abs(random.nextInt() % 99999999) % TCMT_QUEUE_NUMS;
         MessageExtBrokerInner inner = new MessageExtBrokerInner();

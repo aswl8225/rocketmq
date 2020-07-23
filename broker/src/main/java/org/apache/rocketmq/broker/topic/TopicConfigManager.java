@@ -344,7 +344,16 @@ public class TopicConfigManager extends ConfigManager {
         return topicConfig;
     }
 
+    /**
+     * 创建TRANS_CHECK_MAX_TIME_TOPIC
+     * @param clientDefaultTopicQueueNums
+     * @param perm
+     * @return
+     */
     public TopicConfig createTopicOfTranCheckMaxTime(final int clientDefaultTopicQueueNums, final int perm) {
+        /**
+         * 查缓存
+         */
         TopicConfig topicConfig = this.topicConfigTable.get(TopicValidator.RMQ_SYS_TRANS_CHECK_MAX_TIME_TOPIC);
         if (topicConfig != null)
             return topicConfig;
@@ -354,10 +363,16 @@ public class TopicConfigManager extends ConfigManager {
         try {
             if (this.lockTopicConfigTable.tryLock(LOCK_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS)) {
                 try {
+                    /**
+                     * 查缓存
+                     */
                     topicConfig = this.topicConfigTable.get(TopicValidator.RMQ_SYS_TRANS_CHECK_MAX_TIME_TOPIC);
                     if (topicConfig != null)
                         return topicConfig;
 
+                    /**
+                     * 创建TRANS_CHECK_MAX_TIME_TOPIC
+                     */
                     topicConfig = new TopicConfig(TopicValidator.RMQ_SYS_TRANS_CHECK_MAX_TIME_TOPIC);
                     topicConfig.setReadQueueNums(clientDefaultTopicQueueNums);
                     topicConfig.setWriteQueueNums(clientDefaultTopicQueueNums);
@@ -365,9 +380,15 @@ public class TopicConfigManager extends ConfigManager {
                     topicConfig.setTopicSysFlag(0);
 
                     log.info("create new topic {}", topicConfig);
+                    /**
+                     * 缓存
+                     */
                     this.topicConfigTable.put(TopicValidator.RMQ_SYS_TRANS_CHECK_MAX_TIME_TOPIC, topicConfig);
                     createNew = true;
                     this.dataVersion.nextVersion();
+                    /**
+                     * 刷盘
+                     */
                     this.persist();
                 } finally {
                     this.lockTopicConfigTable.unlock();
@@ -377,6 +398,9 @@ public class TopicConfigManager extends ConfigManager {
             log.error("create TRANS_CHECK_MAX_TIME_TOPIC exception", e);
         }
 
+        /**
+         * 通知nameserver   broker创建了新topic
+         */
         if (createNew) {
             this.brokerController.registerBrokerAll(false, true, true);
         }
