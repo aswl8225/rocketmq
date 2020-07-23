@@ -58,6 +58,6 @@ public class TransactionListenerImpl implements TransactionListener {
 //                    return LocalTransactionState.COMMIT_MESSAGE;
 //            }
 //        }
-        return LocalTransactionState.UNKNOW;
+        return LocalTransactionState.COMMIT_MESSAGE;
     }
 }

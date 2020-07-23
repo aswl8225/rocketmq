@@ -527,7 +527,7 @@ public class DLedgerCommitLog extends CommitLog {
         //should be consistent with the old version
         final int tranType = MessageSysFlag.getTransactionValue(msg.getSysFlag());
         /**
-         * 非事务消息或事务提交
+         * 普通事务消息或事务提交
          */
         if (tranType == MessageSysFlag.TRANSACTION_NOT_TYPE
             || tranType == MessageSysFlag.TRANSACTION_COMMIT_TYPE) {

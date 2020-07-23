@@ -1013,6 +1013,7 @@ public class BrokerController {
         if (!messageStoreConfig.isEnableDLegerCommitLog()) {
             /**
              * 启动transactionalMessageCheckService
+             * 检查事务是否执行成功
              */
             startProcessorByHa(messageStoreConfig.getBrokerRole());
             /**

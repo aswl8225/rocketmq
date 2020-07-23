@@ -45,7 +45,7 @@ public class TransactionProducer {
 
         producer.setExecutorService(executorService);
         producer.setTransactionListener(transactionListener);
-        producer.setNamesrvAddr("localhost:9876");
+        producer.setNamesrvAddr("192.168.50.61:9876");
         producer.setInstanceName("group1");
 
         /**

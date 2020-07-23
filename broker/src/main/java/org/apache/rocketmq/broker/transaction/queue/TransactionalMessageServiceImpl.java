@@ -60,6 +60,11 @@ public class TransactionalMessageServiceImpl implements TransactionalMessageServ
 
     private ConcurrentHashMap<MessageQueue, MessageQueue> opQueueMap = new ConcurrentHashMap<>();
 
+    /**
+     * 处理事务消息
+     * @param messageInner Prepare(Half) message.
+     * @return
+     */
     @Override
     public CompletableFuture<PutMessageResult> asyncPrepareMessage(MessageExtBrokerInner messageInner) {
         return transactionalMessageBridge.asyncPutHalfMessage(messageInner);
@@ -190,7 +195,7 @@ public class TransactionalMessageServiceImpl implements TransactionalMessageServ
                 long startTime = System.currentTimeMillis();
 
                 /**
-                 * 获取MessageQueue对应的OpQueue
+                 * 获取MessageQueue对应的OpQueue（topic为RMQ_SYS_TRANS_OP_HALF_TOPIC）
                  */
                 MessageQueue opQueue = getOpQueue(messageQueue);
 

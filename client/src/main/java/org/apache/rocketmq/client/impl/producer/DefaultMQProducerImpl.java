@@ -153,6 +153,9 @@ public class DefaultMQProducerImpl implements MQProducerInner {
         if (producer.getExecutorService() != null) {
             this.checkExecutor = producer.getExecutorService();
         } else {
+            /**
+             * 没有则新建checkExecutor
+             */
             this.checkRequestQueue = new LinkedBlockingQueue<Runnable>(producer.getCheckRequestHoldMax());
             this.checkExecutor = new ThreadPoolExecutor(
                 producer.getCheckThreadPoolMinSize(),
@@ -1436,6 +1439,9 @@ public class DefaultMQProducerImpl implements MQProducerInner {
         }
 
         // ignore DelayTimeLevel parameter
+        /**
+         * 清空延迟属性
+         */
         if (msg.getDelayTimeLevel() != 0) {
             MessageAccessor.clearProperty(msg, MessageConst.PROPERTY_DELAY_TIME_LEVEL);
         }
@@ -1486,6 +1492,8 @@ public class DefaultMQProducerImpl implements MQProducerInner {
                     } else if (transactionListener != null) {
                         log.debug("Used new transaction API");
                         /**
+                         * 执行监听方法
+                         * 执行监听方法
                          * 执行监听方法
                          */
                         localTransactionState = transactionListener.executeLocalTransaction(msg, arg);

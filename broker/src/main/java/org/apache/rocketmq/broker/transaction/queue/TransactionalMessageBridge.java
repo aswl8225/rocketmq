@@ -458,6 +458,8 @@ public class TransactionalMessageBridge {
          * RMQ_SYS_TRANS_OP_HALF_TOPIC
          *
          * 消息的body部分  存储得是messageExt的QueueOffset   messageExt对应的topic是RMQ_SYS_TRANS_HALF_TOPIC
+         * 消息的body部分  存储得是messageExt的QueueOffset
+         * 消息的body部分  存储得是messageExt的QueueOffset
          */
         Message message = new Message(TransactionalMessageUtil.buildOpTopic(), TransactionalMessageUtil.REMOVETAG,
             String.valueOf(messageExt.getQueueOffset()).getBytes(TransactionalMessageUtil.charset));
@@ -508,6 +510,7 @@ public class TransactionalMessageBridge {
      */
     private MessageQueue getOpQueueByHalf(MessageQueue halfMQ) {
         MessageQueue opQueue = new MessageQueue();
+        //RMQ_SYS_TRANS_OP_HALF_TOPIC
         opQueue.setTopic(TransactionalMessageUtil.buildOpTopic());
         opQueue.setBrokerName(halfMQ.getBrokerName());
         opQueue.setQueueId(halfMQ.getQueueId());
