@@ -38,7 +38,7 @@ public class DefaultTransactionalMessageCheckListener extends AbstractTransactio
     }
 
     /**
-     * 日志输出  将消息写入ANS_CHECK_MAX_TIME_TOPIC
+     * 日志输出  将消息写入TRANS_CHECK_MAX_TIME_TOPIC
      * @param msgExt Message to be discarded.
      */
     @Override
@@ -47,7 +47,7 @@ public class DefaultTransactionalMessageCheckListener extends AbstractTransactio
 
         try {
             /**
-             * copy新消息   topic为RANS_CHECK_MAX_TIME_TOPIC
+             * copy新消息   topic为TRANS_CHECK_MAX_TIME_TOPIC
              */
             MessageExtBrokerInner brokerInner = toMessageExtBrokerInner(msgExt);
             /**
@@ -67,7 +67,7 @@ public class DefaultTransactionalMessageCheckListener extends AbstractTransactio
     }
 
     /**
-     * copy新消息   topic为RANS_CHECK_MAX_TIME_TOPIC
+     * copy新消息   topic为TRANS_CHECK_MAX_TIME_TOPIC
      * @param msgExt
      * @return
      */

@@ -293,7 +293,7 @@ public class TransactionalMessageServiceImpl implements TransactionalMessageServ
                          */
                         if (needDiscard(msgExt, transactionCheckMax) || needSkip(msgExt)) {
                             /**
-                             * 将消息写入ANS_CHECK_MAX_TIME_TOPIC
+                             * 将消息写入TRANS_CHECK_MAX_TIME_TOPIC
                              */
                             listener.resolveDiscardMsg(msgExt);
                             newOffset = i + 1;
@@ -313,6 +313,11 @@ public class TransactionalMessageServiceImpl implements TransactionalMessageServ
 
                         long valueOfCurrentMinusBorn = System.currentTimeMillis() - msgExt.getBornTimestamp();
                         long checkImmunityTime = transactionTimeout;
+                        /**
+                         * 事务消息将在 Broker 配置文件中的参数 transactionTimeout 这样的特定时间长度之后被检查。
+                         * 当发送事务消息时，用户还可以通过设置用户属性 CHECK_IMMUNITY_TIME_IN_SECONDS 来改变这个限制，
+                         * 该参数优先于 `transactionTimeout` 参数。
+                         */
                         String checkImmunityTimeStr = msgExt.getUserProperty(MessageConst.PROPERTY_CHECK_IMMUNITY_TIME_IN_SECONDS);
                         if (null != checkImmunityTimeStr) {
                             checkImmunityTime = getImmunityTime(checkImmunityTimeStr, transactionTimeout);
