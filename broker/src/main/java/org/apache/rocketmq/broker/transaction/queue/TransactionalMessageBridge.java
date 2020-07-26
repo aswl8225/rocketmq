@@ -389,6 +389,11 @@ public class TransactionalMessageBridge {
         return msgInner;
     }
 
+    /**
+     * 将MessageExt数据存入MessageExtBrokerInner
+     * @param msgExt
+     * @return
+     */
     public MessageExtBrokerInner renewHalfMessageInner(MessageExt msgExt) {
         MessageExtBrokerInner msgInner = new MessageExtBrokerInner();
         msgInner.setTopic(msgExt.getTopic());

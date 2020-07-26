@@ -887,7 +887,9 @@ public class DefaultMessageStore implements MessageStore {
                             }
 
                             /**
-                             * ConsumeQueue    tags的hash过滤   ExpressionMessageFilter
+                             * ConsumeQueue    tags的hash过滤
+                             * 判断消息tags的hashcode与订阅的hashcode是否一致
+                             * ExpressionMessageFilter
                              */
                             if (messageFilter != null
                                 && !messageFilter.isMatchedByConsumeQueue(isTagsCodeLegal ? tagsCode : null, extRet ? cqExtUnit : null)) {

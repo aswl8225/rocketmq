@@ -130,7 +130,7 @@ public class TransactionalMessageServiceImpl implements TransactionalMessageServ
      * 再次将msgExt存入commitlog
      * @param msgExt
      * @param offset
-     * @return
+     * @return   顺利存入返回true  否则返回false
      */
     private boolean putBackHalfMsgQueue(MessageExt msgExt, long offset) {
         /**

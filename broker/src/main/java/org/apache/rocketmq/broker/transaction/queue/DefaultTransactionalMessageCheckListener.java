@@ -51,7 +51,7 @@ public class DefaultTransactionalMessageCheckListener extends AbstractTransactio
              */
             MessageExtBrokerInner brokerInner = toMessageExtBrokerInner(msgExt);
             /**
-             * 写入消息
+             * 写入
              */
             PutMessageResult putMessageResult = this.getBrokerController().getMessageStore().putMessage(brokerInner);
             if (putMessageResult != null && putMessageResult.getPutMessageStatus() == PutMessageStatus.PUT_OK) {
