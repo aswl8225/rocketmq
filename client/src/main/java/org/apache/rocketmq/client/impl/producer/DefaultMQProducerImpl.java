@@ -1457,6 +1457,10 @@ public class DefaultMQProducerImpl implements MQProducerInner {
          * 增加TRAN_MSG和PGROUP属性
          */
         MessageAccessor.putProperty(msg, MessageConst.PROPERTY_TRANSACTION_PREPARED, "true");
+        /**
+         * broker通过PGROUP属性来获取对应生产者
+         * 生产者通过PGROUP属性获取实例，执行本地事务查询
+         */
         MessageAccessor.putProperty(msg, MessageConst.PROPERTY_PRODUCER_GROUP, this.defaultMQProducer.getProducerGroup());
         try {
             /**

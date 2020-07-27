@@ -127,6 +127,9 @@ public class ClientRemotingProcessor extends AsyncNettyRequestProcessor implemen
             if (null != transactionId && !"".equals(transactionId)) {
                 messageExt.setTransactionId(transactionId);
             }
+            /**
+             * 获取消息对应的PGROUP
+             */
             final String group = messageExt.getProperty(MessageConst.PROPERTY_PRODUCER_GROUP);
             if (group != null) {
                 /**
