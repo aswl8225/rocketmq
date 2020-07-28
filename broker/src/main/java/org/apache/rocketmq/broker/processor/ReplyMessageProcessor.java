@@ -62,10 +62,20 @@ public class ReplyMessageProcessor extends AbstractSendMessageProcessor implemen
         }
 
         mqtraceContext = buildMsgContext(ctx, requestHeader);
+
+        /**
+         * 执行hookBefore
+         */
         this.executeSendMessageHookBefore(ctx, request, mqtraceContext);
 
+        /**
+         * 处理reply消息
+         */
         RemotingCommand response = this.processReplyMessageRequest(ctx, request, mqtraceContext, requestHeader);
 
+        /**
+         * 执行hookAfter
+         */
         this.executeSendMessageHookAfter(response, mqtraceContext);
         return response;
     }
@@ -93,6 +103,14 @@ public class ReplyMessageProcessor extends AbstractSendMessageProcessor implemen
         return requestHeader;
     }
 
+    /**
+     * 处理reply消息
+     * @param ctx
+     * @param request
+     * @param sendMessageContext
+     * @param requestHeader
+     * @return
+     */
     private RemotingCommand processReplyMessageRequest(final ChannelHandlerContext ctx,
         final RemotingCommand request,
         final SendMessageContext sendMessageContext,
@@ -114,6 +132,9 @@ public class ReplyMessageProcessor extends AbstractSendMessageProcessor implemen
         }
 
         response.setCode(-1);
+        /**
+         * 校验topic  是否顺序  名称是否为默认  已经是否存在  如果不存在是否需要创建并通知nameserver  以及ha
+         */
         super.msgCheck(ctx, requestHeader, response);
         if (response.getCode() != -1) {
             return response;
@@ -128,6 +149,9 @@ public class ReplyMessageProcessor extends AbstractSendMessageProcessor implemen
             queueIdInt = Math.abs(this.random.nextInt() % 99999999) % topicConfig.getWriteQueueNums();
         }
 
+        /**
+         * 创建reply消息
+         */
         MessageExtBrokerInner msgInner = new MessageExtBrokerInner();
         msgInner.setTopic(requestHeader.getTopic());
         msgInner.setQueueId(queueIdInt);
@@ -140,10 +164,19 @@ public class ReplyMessageProcessor extends AbstractSendMessageProcessor implemen
         msgInner.setStoreHost(this.getStoreHost());
         msgInner.setReconsumeTimes(requestHeader.getReconsumeTimes() == null ? 0 : requestHeader.getReconsumeTimes());
 
+        /**
+         *
+         */
         PushReplyResult pushReplyResult = this.pushReplyMessage(ctx, requestHeader, msgInner);
         this.handlePushReplyResult(pushReplyResult, response, responseHeader, queueIdInt);
 
+        /**
+         * broker允许存储reply消息
+         */
         if (this.brokerController.getBrokerConfig().isStoreReplyMessageEnable()) {
+            /**
+             * 存储reply消息
+             */
             PutMessageResult putMessageResult = this.brokerController.getMessageStore().putMessage(msgInner);
             this.handlePutMessageResult(putMessageResult, request, msgInner, responseHeader, sendMessageContext, queueIdInt);
         }
@@ -151,6 +184,13 @@ public class ReplyMessageProcessor extends AbstractSendMessageProcessor implemen
         return response;
     }
 
+    /**
+     *
+     * @param ctx
+     * @param requestHeader
+     * @param msg
+     * @return
+     */
     private PushReplyResult pushReplyMessage(final ChannelHandlerContext ctx,
         final SendMessageRequestHeader requestHeader,
         final Message msg) {

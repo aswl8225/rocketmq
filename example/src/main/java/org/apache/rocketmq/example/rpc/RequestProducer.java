@@ -24,11 +24,13 @@ import org.apache.rocketmq.remoting.common.RemotingHelper;
 
 public class RequestProducer {
     public static void main(String[] args) throws MQClientException, InterruptedException {
-        String producerGroup = "please_rename_unique_group_name";
+        String producerGroup = "requestProducerGroup";
         String topic = "RequestTopic";
         long ttl = 3000;
 
         DefaultMQProducer producer = new DefaultMQProducer(producerGroup);
+        producer.setNamesrvAddr("192.168.50.61:9876");
+        producer.setInstanceName("request1");
         producer.start();
 
         try {

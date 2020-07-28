@@ -27,7 +27,7 @@ public class TraceProducer {
     public static void main(String[] args) throws MQClientException, InterruptedException {
 
         DefaultMQProducer producer = new DefaultMQProducer("traceMessageProducer",true);
-        producer.setNamesrvAddr("localhost:9876");
+        producer.setNamesrvAddr("192.168.50.65:9876");
         producer.start();
 
         for (int i = 0; i < 3; i++)

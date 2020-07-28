@@ -34,7 +34,7 @@ public class TracePushConsumer {
         consumer.setConsumeFromWhere(ConsumeFromWhere.CONSUME_FROM_FIRST_OFFSET);
         // Wrong time format 2017_0422_221800
 //        consumer.setConsumeTimestamp("20181109221800");
-        consumer.setNamesrvAddr("localhost:9876");
+        consumer.setNamesrvAddr("192.168.50.65:9876");
         consumer.registerMessageListener(new MessageListenerConcurrently() {
 
             @Override

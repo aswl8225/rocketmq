@@ -1648,17 +1648,38 @@ public class DefaultMQProducerImpl implements MQProducerInner {
         return this.sendDefaultImpl(msg, CommunicationMode.SYNC, null, timeout);
     }
 
+    /**
+     *
+     * @param msg
+     * @param timeout
+     * @return
+     * @throws RequestTimeoutException
+     * @throws MQClientException
+     * @throws RemotingException
+     * @throws MQBrokerException
+     * @throws InterruptedException
+     */
     public Message request(Message msg,
         long timeout) throws RequestTimeoutException, MQClientException, RemotingException, MQBrokerException, InterruptedException {
         long beginTimestamp = System.currentTimeMillis();
+        /**
+         * 预处理  计算correlationId 获取clientId
+         */
         prepareSendRequest(msg, timeout);
         final String correlationId = msg.getProperty(MessageConst.PROPERTY_CORRELATION_ID);
 
         try {
             final RequestResponseFuture requestResponseFuture = new RequestResponseFuture(correlationId, timeout, null);
+            /**
+             * 记录correlationId对应得RequestResponseFuture
+             * 请求关联响应
+             */
             RequestFutureTable.getRequestFutureTable().put(correlationId, requestResponseFuture);
 
             long cost = System.currentTimeMillis() - beginTimestamp;
+            /**
+             * 发送消息
+             */
             this.sendDefaultImpl(msg, CommunicationMode.ASYNC, new SendCallback() {
                 @Override
                 public void onSuccess(SendResult sendResult) {
@@ -1673,6 +1694,9 @@ public class DefaultMQProducerImpl implements MQProducerInner {
                 }
             }, timeout - cost);
 
+            /**
+             * 等待consumer通知
+             */
             return waitResponse(msg, timeout, requestResponseFuture, cost);
         } finally {
             RequestFutureTable.getRequestFutureTable().remove(correlationId);
@@ -1682,13 +1706,23 @@ public class DefaultMQProducerImpl implements MQProducerInner {
     public void request(Message msg, final RequestCallback requestCallback, long timeout)
         throws RemotingException, InterruptedException, MQClientException, MQBrokerException {
         long beginTimestamp = System.currentTimeMillis();
+        /**
+         * 预处理  计算correlationId 获取clientId
+         */
         prepareSendRequest(msg, timeout);
-        final String correlationId = msg.getProperty(MessageConst.PROPERTY_CORRELATION_ID);
 
+        final String correlationId = msg.getProperty(MessageConst.PROPERTY_CORRELATION_ID);
         final RequestResponseFuture requestResponseFuture = new RequestResponseFuture(correlationId, timeout, requestCallback);
+        /**
+         * 记录correlationId对应得RequestResponseFuture
+         * 请求关联响应
+         */
         RequestFutureTable.getRequestFutureTable().put(correlationId, requestResponseFuture);
 
         long cost = System.currentTimeMillis() - beginTimestamp;
+        /**
+         * 发送消息
+         */
         this.sendDefaultImpl(msg, CommunicationMode.ASYNC, new SendCallback() {
             @Override
             public void onSuccess(SendResult sendResult) {
@@ -1792,7 +1826,19 @@ public class DefaultMQProducerImpl implements MQProducerInner {
         }
     }
 
+    /**
+     * 等待通知
+     * @param msg
+     * @param timeout
+     * @param requestResponseFuture
+     * @param cost
+     * @return
+     * @throws InterruptedException
+     * @throws RequestTimeoutException
+     * @throws MQClientException
+     */
     private Message waitResponse(Message msg, long timeout, RequestResponseFuture requestResponseFuture, long cost) throws InterruptedException, RequestTimeoutException, MQClientException {
+        //countDownLatch等待
         Message responseMessage = requestResponseFuture.waitResponseMessage(timeout - cost);
         if (responseMessage == null) {
             if (requestResponseFuture.isSendRequestOk()) {
@@ -1842,17 +1888,33 @@ public class DefaultMQProducerImpl implements MQProducerInner {
         }
     }
 
+    /**
+     * 预处理
+     * @param msg
+     * @param timeout
+     */
     private void prepareSendRequest(final Message msg, long timeout) {
+        //计算correlationId
         String correlationId = CorrelationIdUtil.createCorrelationId();
+        //获取clientId
         String requestClientId = this.getmQClientFactory().getClientId();
+        /**
+         * 给msg对应得属性赋值
+         */
         MessageAccessor.putProperty(msg, MessageConst.PROPERTY_CORRELATION_ID, correlationId);
         MessageAccessor.putProperty(msg, MessageConst.PROPERTY_MESSAGE_REPLY_TO_CLIENT, requestClientId);
         MessageAccessor.putProperty(msg, MessageConst.PROPERTY_MESSAGE_TTL, String.valueOf(timeout));
 
+        /**
+         * producer端是否有topic对应得路由
+         * 没有则更新路由并向broker发送心跳
+         */
         boolean hasRouteData = this.getmQClientFactory().getTopicRouteTable().containsKey(msg.getTopic());
         if (!hasRouteData) {
             long beginTimestamp = System.currentTimeMillis();
+            //更新路由
             this.tryToFindTopicPublishInfo(msg.getTopic());
+            //发送心跳
             this.getmQClientFactory().sendHeartbeatToAllBrokerWithLock();
             long cost = System.currentTimeMillis() - beginTimestamp;
             if (cost > 500) {

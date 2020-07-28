@@ -70,14 +70,27 @@ public abstract class AbstractSendMessageProcessor extends AsyncNettyRequestProc
                 .getNettyServerConfig().getListenPort());
     }
 
+    /**
+     * 构建replycontent
+     * @param ctx
+     * @param requestHeader
+     * @return
+     */
     protected SendMessageContext buildMsgContext(ChannelHandlerContext ctx,
         SendMessageRequestHeader requestHeader) {
+        /**
+         * 没有设置hook  则返回null
+         */
         if (!this.hasSendMessageHook()) {
             return null;
         }
         String namespace = NamespaceUtil.getNamespaceFromResource(requestHeader.getTopic());
         SendMessageContext mqtraceContext;
         mqtraceContext = new SendMessageContext();
+
+        /**
+         * 设置mqtraceContext
+         */
         mqtraceContext.setProducerGroup(requestHeader.getProducerGroup());
         mqtraceContext.setNamespace(namespace);
         mqtraceContext.setTopic(requestHeader.getTopic());
