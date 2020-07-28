@@ -90,6 +90,9 @@ public class ClientRemotingProcessor extends AsyncNettyRequestProcessor implemen
                 return this.consumeMessageDirectly(ctx, request);
 
             case RequestCode.PUSH_REPLY_MESSAGE_TO_CLIENT:
+                /**
+                 * producer接收broker的reply
+                 */
                 return this.receiveReplyMessage(ctx, request);
             default:
                 break;
@@ -258,6 +261,13 @@ public class ClientRemotingProcessor extends AsyncNettyRequestProcessor implemen
         return response;
     }
 
+    /**
+     * producer接收broker的reply
+     * @param ctx
+     * @param request
+     * @return
+     * @throws RemotingCommandException
+     */
     private RemotingCommand receiveReplyMessage(ChannelHandlerContext ctx,
         RemotingCommand request) throws RemotingCommandException {
 
@@ -266,6 +276,9 @@ public class ClientRemotingProcessor extends AsyncNettyRequestProcessor implemen
         ReplyMessageRequestHeader requestHeader = (ReplyMessageRequestHeader) request.decodeCommandCustomHeader(ReplyMessageRequestHeader.class);
 
         try {
+            /**
+             * 将broker的reply信息转换为MessageExt
+             */
             MessageExt msg = new MessageExt();
             msg.setTopic(requestHeader.getTopic());
             msg.setQueueId(requestHeader.getQueueId());
@@ -280,6 +293,9 @@ public class ClientRemotingProcessor extends AsyncNettyRequestProcessor implemen
             }
 
             byte[] body = request.getBody();
+            /**
+             * 如果消息题经过压缩则这里要进行解压
+             */
             if ((requestHeader.getSysFlag() & MessageSysFlag.COMPRESSED_FLAG) == MessageSysFlag.COMPRESSED_FLAG) {
                 try {
                     body = UtilAll.uncompress(body);
@@ -295,6 +311,9 @@ public class ClientRemotingProcessor extends AsyncNettyRequestProcessor implemen
             msg.setReconsumeTimes(requestHeader.getReconsumeTimes() == null ? 0 : requestHeader.getReconsumeTimes());
             log.debug("receive reply message :{}", msg);
 
+            /**
+             * producer处理reply消息
+             */
             processReplyMessage(msg);
 
             response.setCode(ResponseCode.SUCCESS);
@@ -307,12 +326,25 @@ public class ClientRemotingProcessor extends AsyncNettyRequestProcessor implemen
         return response;
     }
 
+    /**
+     * producer处理reply消息
+     * @param replyMsg
+     */
     private void processReplyMessage(MessageExt replyMsg) {
+        /**
+         * 获取correlationId对应的RequestResponseFuture
+         */
         final String correlationId = replyMsg.getUserProperty(MessageConst.PROPERTY_CORRELATION_ID);
         final RequestResponseFuture requestResponseFuture = RequestFutureTable.getRequestFutureTable().get(correlationId);
         if (requestResponseFuture != null) {
+            /**
+             * 赋值并唤醒countDownLatch
+             */
             requestResponseFuture.putResponseMessage(replyMsg);
 
+            /**
+             * reply成功，则移除缓存
+             */
             RequestFutureTable.getRequestFutureTable().remove(correlationId);
 
             if (requestResponseFuture.getRequestCallback() != null) {

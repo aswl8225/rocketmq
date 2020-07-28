@@ -1649,7 +1649,7 @@ public class DefaultMQProducerImpl implements MQProducerInner {
     }
 
     /**
-     *
+     * 同步request
      * @param msg
      * @param timeout
      * @return
@@ -1703,6 +1703,16 @@ public class DefaultMQProducerImpl implements MQProducerInner {
         }
     }
 
+    /**
+     * 异步request
+     * @param msg
+     * @param requestCallback
+     * @param timeout
+     * @throws RemotingException
+     * @throws InterruptedException
+     * @throws MQClientException
+     * @throws MQBrokerException
+     */
     public void request(Message msg, final RequestCallback requestCallback, long timeout)
         throws RemotingException, InterruptedException, MQClientException, MQBrokerException {
         long beginTimestamp = System.currentTimeMillis();

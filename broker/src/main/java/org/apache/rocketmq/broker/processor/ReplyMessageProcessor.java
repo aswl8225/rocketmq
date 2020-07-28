@@ -194,6 +194,9 @@ public class ReplyMessageProcessor extends AbstractSendMessageProcessor implemen
     private PushReplyResult pushReplyMessage(final ChannelHandlerContext ctx,
         final SendMessageRequestHeader requestHeader,
         final Message msg) {
+        /**
+         * 准备reply数据
+         */
         ReplyMessageRequestHeader replyMessageRequestHeader = new ReplyMessageRequestHeader();
         replyMessageRequestHeader.setBornHost(ctx.channel().remoteAddress().toString());
         replyMessageRequestHeader.setStoreHost(this.getStoreHost().toString());
@@ -210,19 +213,31 @@ public class ReplyMessageProcessor extends AbstractSendMessageProcessor implemen
         replyMessageRequestHeader.setReconsumeTimes(requestHeader.getReconsumeTimes());
         replyMessageRequestHeader.setUnitMode(requestHeader.isUnitMode());
 
+        /**
+         * code为PUSH_REPLY_MESSAGE_TO_CLIENT
+         */
         RemotingCommand request = RemotingCommand.createRequestCommand(RequestCode.PUSH_REPLY_MESSAGE_TO_CLIENT, replyMessageRequestHeader);
         request.setBody(msg.getBody());
 
+        /**
+         * 获取消息对应的REPLY_TO_CLIENT   即procuder的clientId
+         */
         String senderId = msg.getProperties().get(MessageConst.PROPERTY_MESSAGE_REPLY_TO_CLIENT);
         PushReplyResult pushReplyResult = new PushReplyResult(false);
 
         if (senderId != null) {
+            /**
+             * 获取producer对应的channel
+             */
             Channel channel = this.brokerController.getProducerManager().findChannel(senderId);
             if (channel != null) {
                 msg.getProperties().put(MessageConst.PROPERTY_PUSH_REPLY_TIME, String.valueOf(System.currentTimeMillis()));
                 replyMessageRequestHeader.setProperties(MessageDecoder.messageProperties2String(msg.getProperties()));
 
                 try {
+                    /**
+                     * 向producer发送reply
+                     */
                     RemotingCommand pushResponse = this.brokerController.getBroker2Client().callClient(channel, request);
                     assert pushResponse != null;
                     switch (pushResponse.getCode()) {
