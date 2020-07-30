@@ -67,7 +67,7 @@ public class ResponseConsumer {
                          * 获取消息的REPLY_TO_CLIENT   即producer对应得clientId
                          */
                         String replyTo = MessageUtil.getReplyToClient(msg);
-                        byte[] replyContent = "reply message contents.".getBytes();
+                        byte[] replyContent = "reply message contents.收到回复就是地方就收到回复".getBytes();
                         // create reply message with given util, do not create reply message by yourself
 
                         MessageAccessor.putProperty(msg, MessageConst.PROPERTY_CLUSTER, "DefaultCluster");

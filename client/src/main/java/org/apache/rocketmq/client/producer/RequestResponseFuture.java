@@ -53,12 +53,28 @@ public class RequestResponseFuture {
         return diff > this.timeoutMillis;
     }
 
+    /**
+     * 等待返回
+     * @param timeout
+     * @return
+     * @throws InterruptedException
+     */
     public Message waitResponseMessage(final long timeout) throws InterruptedException {
+        /**
+         * 等待timeout后  返回responseMsg
+         */
         this.countDownLatch.await(timeout, TimeUnit.MILLISECONDS);
         return this.responseMsg;
     }
 
+    /**
+     * 返回结果
+     * @param responseMsg
+     */
     public void putResponseMessage(final Message responseMsg) {
+        /**
+         * producer获取到结果   结束等待（countDown）
+         */
         this.responseMsg = responseMsg;
         this.countDownLatch.countDown();
     }
