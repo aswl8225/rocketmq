@@ -81,7 +81,7 @@ public abstract class AbstractTransactionalMessageCheckListener {
          * 通过PGROUP获取对应生产者的channel
          */
         String groupId = msgExt.getProperty(MessageConst.PROPERTY_PRODUCER_GROUP);
-        Channel channel = brokerController.getProducerManager().getAvaliableChannel(groupId);
+        Channel channel = brokerController.getProducerManager().getAvailableChannel(groupId);
         if (channel != null) {
             /**
              * 向producer发起事务状态回查

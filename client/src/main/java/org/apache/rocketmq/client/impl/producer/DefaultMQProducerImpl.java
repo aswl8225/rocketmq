@@ -1329,7 +1329,7 @@ public class DefaultMQProducerImpl implements MQProducerInner {
                  */
                 mq = mQClientFactory.getClientConfig().queueWithNamespace(selector.select(messageQueueList, userMessage, arg));
             } catch (Throwable e) {
-                throw new MQClientException("select message queue throwed exception.", e);
+                throw new MQClientException("select message queue threw exception.", e);
             }
 
             long costTime = System.currentTimeMillis() - beginStartTime;

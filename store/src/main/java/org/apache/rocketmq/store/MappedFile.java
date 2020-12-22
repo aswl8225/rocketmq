@@ -450,7 +450,7 @@ public class MappedFile extends ReferenceResource {
         /**
          * 将数据写入fileChannel  并更新committedPosition为wrotePosition
          */
-        if (writePos - this.committedPosition.get() > 0) {
+        if (writePos - lastCommittedPosition > commitLeastPages) {
             try {
                 ByteBuffer byteBuffer = writeBuffer.slice();
                 byteBuffer.position(lastCommittedPosition);

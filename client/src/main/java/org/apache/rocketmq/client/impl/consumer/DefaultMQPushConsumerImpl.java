@@ -433,30 +433,25 @@ public class DefaultMQPushConsumerImpl implements MQConsumerInner {
                         /**
                          * 没有可消费的消息
                          */
+                        /**
+                         * 没有可消费的消息
+                         */
                         case NO_NEW_MSG:
-                            /**
-                             * 更新下次消费的起始进度
-                             */
-                            pullRequest.setNextOffset(pullResult.getNextBeginOffset());
-
-                            /**
-                             * pullRequest中的ProcessQueue没有需要消费的消息时   更新offsetTable中MessageQueue对应的offset
-                             */
-                            DefaultMQPushConsumerImpl.this.correctTagsOffset(pullRequest);
-
-                            /**
-                             * 立即将pullRequest注入到pullRequestQueue中
-                             */
-                            DefaultMQPushConsumerImpl.this.executePullRequestImmediately(pullRequest);
-                            break;
                         /**
                          * 没有匹配的消息   即tag不相符
                          */
                         case NO_MATCHED_MSG:
+                            /**
+                             * 更新下次消费的起始进度
+                             */
                             pullRequest.setNextOffset(pullResult.getNextBeginOffset());
-
+                            /**
+                             * pullRequest中的ProcessQueue没有需要消费的消息时   更新offsetTable中MessageQueue对应的offset
+                             */
                             DefaultMQPushConsumerImpl.this.correctTagsOffset(pullRequest);
-
+                            /**
+                             * 立即将pullRequest注入到pullRequestQueue中
+                             */
                             DefaultMQPushConsumerImpl.this.executePullRequestImmediately(pullRequest);
                             break;
                         /**
