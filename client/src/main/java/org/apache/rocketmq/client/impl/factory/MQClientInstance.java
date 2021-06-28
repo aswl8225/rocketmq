@@ -1373,7 +1373,7 @@ public class MQClientInstance {
         return null;
     }
 
-    public void resetOffset(String topic, String group, Map<MessageQueue, Long> offsetTable) {
+    public synchronized void resetOffset(String topic, String group, Map<MessageQueue, Long> offsetTable) {
         DefaultMQPushConsumerImpl consumer = null;
         try {
             MQConsumerInner impl = this.consumerTable.get(group);

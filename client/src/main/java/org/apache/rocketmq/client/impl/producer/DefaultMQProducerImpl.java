@@ -44,6 +44,8 @@ import org.apache.rocketmq.client.exception.MQClientException;
 import org.apache.rocketmq.client.exception.RequestTimeoutException;
 import org.apache.rocketmq.client.hook.CheckForbiddenContext;
 import org.apache.rocketmq.client.hook.CheckForbiddenHook;
+import org.apache.rocketmq.client.hook.EndTransactionContext;
+import org.apache.rocketmq.client.hook.EndTransactionHook;
 import org.apache.rocketmq.client.hook.SendMessageContext;
 import org.apache.rocketmq.client.hook.SendMessageHook;
 import org.apache.rocketmq.client.impl.CommunicationMode;
@@ -101,6 +103,7 @@ public class DefaultMQProducerImpl implements MQProducerInner {
     private final ConcurrentMap<String/* topic */, TopicPublishInfo> topicPublishInfoTable =
         new ConcurrentHashMap<String, TopicPublishInfo>();
     private final ArrayList<SendMessageHook> sendMessageHookList = new ArrayList<SendMessageHook>();
+    private final ArrayList<EndTransactionHook> endTransactionHookList = new ArrayList<EndTransactionHook>();
     private final RPCHook rpcHook;
     private final BlockingQueue<Runnable> asyncSenderThreadPoolQueue;
     private final ExecutorService defaultAsyncSenderExecutor;
@@ -179,6 +182,11 @@ public class DefaultMQProducerImpl implements MQProducerInner {
     public void registerSendMessageHook(final SendMessageHook hook) {
         this.sendMessageHookList.add(hook);
         log.info("register sendMessage Hook, {}", hook.hookName());
+    }
+
+    public void registerEndTransactionHook(final EndTransactionHook hook) {
+        this.endTransactionHookList.add(hook);
+        log.info("register endTransaction Hook, {}", hook.hookName());
     }
 
     public void start() throws MQClientException {
@@ -441,6 +449,7 @@ public class DefaultMQProducerImpl implements MQProducerInner {
                 if (exception != null) {
                     remark = "checkLocalTransactionState Exception: " + RemotingHelper.exceptionSimpleDesc(exception);
                 }
+                doExecuteEndTransactionHook(msg, uniqueKey, brokerAddr, localTransactionState, true);
 
                 try {
                     /**
@@ -1154,6 +1163,36 @@ public class DefaultMQProducerImpl implements MQProducerInner {
         }
     }
 
+    public boolean hasEndTransactionHook() {
+        return !this.endTransactionHookList.isEmpty();
+    }
+
+    public void executeEndTransactionHook(final EndTransactionContext context) {
+        if (!this.endTransactionHookList.isEmpty()) {
+            for (EndTransactionHook hook : this.endTransactionHookList) {
+                try {
+                    hook.endTransaction(context);
+                } catch (Throwable e) {
+                    log.warn("failed to executeEndTransactionHook", e);
+                }
+            }
+        }
+    }
+
+    public void doExecuteEndTransactionHook(Message msg, String msgId, String brokerAddr, LocalTransactionState state,
+        boolean fromTransactionCheck) {
+        if (hasEndTransactionHook()) {
+            EndTransactionContext context = new EndTransactionContext();
+            context.setProducerGroup(defaultMQProducer.getProducerGroup());
+            context.setBrokerAddr(brokerAddr);
+            context.setMessage(msg);
+            context.setMsgId(msgId);
+            context.setTransactionId(msg.getTransactionId());
+            context.setTransactionState(state);
+            context.setFromTransactionCheck(fromTransactionCheck);
+            executeEndTransactionHook(context);
+        }
+    }
     /**
      * DEFAULT ONEWAY -------------------------------------------------------
      */
@@ -1532,7 +1571,7 @@ public class DefaultMQProducerImpl implements MQProducerInner {
              * endTransaction
              * endTransaction
              */
-            this.endTransaction(sendResult, localTransactionState, localException);
+            this.endTransaction(msg, sendResult, localTransactionState, localException);
         } catch (Exception e) {
             log.warn("local transaction execute " + localTransactionState + ", but end broker transaction failed", e);
         }
@@ -1566,6 +1605,7 @@ public class DefaultMQProducerImpl implements MQProducerInner {
      * @throws UnknownHostException
      */
     public void endTransaction(
+        final Message msg,
         final SendResult sendResult,
         final LocalTransactionState localTransactionState,
         final Throwable localException) throws RemotingException, MQBrokerException, InterruptedException, UnknownHostException {
@@ -1607,6 +1647,7 @@ public class DefaultMQProducerImpl implements MQProducerInner {
                 break;
         }
 
+        doExecuteEndTransactionHook(msg, sendResult.getMsgId(), brokerAddr, localTransactionState, false);
         requestHeader.setProducerGroup(this.defaultMQProducer.getProducerGroup());
         requestHeader.setTranStateTableOffset(sendResult.getQueueOffset());
         requestHeader.setMsgId(sendResult.getMsgId());

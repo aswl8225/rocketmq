@@ -305,6 +305,8 @@ public class SendMessageProcessor extends AbstractSendMessageProcessor implement
 
         String originMsgId = MessageAccessor.getOriginMessageId(msgExt);
         MessageAccessor.setOriginMessageId(msgInner, UtilAll.isBlank(originMsgId) ? msgExt.getMsgId() : originMsgId);
+        msgInner.setPropertiesString(MessageDecoder.messageProperties2String(msgExt.getProperties()));
+
         /**
          * 存储消息  作为一条全新的消息  再次存储   只是对应的topic和queueid会改变
          * 存储消息  作为一条全新的消息  再次存储   只是对应的topic和queueid会改变

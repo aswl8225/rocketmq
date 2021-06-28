@@ -107,11 +107,11 @@ public class RebalancePushImpl extends RebalanceImpl {
         if (this.defaultMQPushConsumerImpl.isConsumeOrderly()
             && MessageModel.CLUSTERING.equals(this.defaultMQPushConsumerImpl.messageModel())) {
             try {
-                if (pq.getLockConsume().tryLock(1000, TimeUnit.MILLISECONDS)) {
+                if (pq.getConsumeLock().tryLock(1000, TimeUnit.MILLISECONDS)) {
                     try {
                         return this.unlockDelay(mq, pq);
                     } finally {
-                        pq.getLockConsume().unlock();
+                        pq.getConsumeLock().unlock();
                     }
                 } else {
                     log.warn("[WRONG]mq is consuming, so can not unlock it, {}. maybe hanged for a while, {}",
@@ -160,8 +160,20 @@ public class RebalancePushImpl extends RebalanceImpl {
         this.defaultMQPushConsumerImpl.getOffsetStore().removeOffset(mq);
     }
 
+    @Deprecated
     @Override
     public long computePullFromWhere(MessageQueue mq) {
+        long result = -1L;
+        try {
+            result = computePullFromWhereWithException(mq);
+        } catch (MQClientException e) {
+            log.warn("Compute consume offset exception, mq={}", mq);
+        }
+        return result;
+    }
+
+    @Override
+    public long computePullFromWhereWithException(MessageQueue mq) throws MQClientException {
         long result = -1;
         final ConsumeFromWhere consumeFromWhere = this.defaultMQPushConsumerImpl.getDefaultMQPushConsumer().getConsumeFromWhere();
         final OffsetStore offsetStore = this.defaultMQPushConsumerImpl.getOffsetStore();
@@ -195,7 +207,8 @@ public class RebalancePushImpl extends RebalanceImpl {
                              */
                             result = this.mQClientFactory.getMQAdminImpl().maxOffset(mq);
                         } catch (MQClientException e) {
-                            result = -1;
+                            log.warn("Compute consume offset from last offset exception, mq={}, exception={}", mq, e);
+                            throw e;
                         }
                     }
                 } else {
@@ -223,7 +236,8 @@ public class RebalancePushImpl extends RebalanceImpl {
                         try {
                             result = this.mQClientFactory.getMQAdminImpl().maxOffset(mq);
                         } catch (MQClientException e) {
-                            result = -1;
+                            log.warn("Compute consume offset from last offset exception, mq={}, exception={}", mq, e);
+                            throw e;
                         }
                     } else {
                         try {
@@ -231,7 +245,8 @@ public class RebalancePushImpl extends RebalanceImpl {
                                 UtilAll.YYYYMMDDHHMMSS).getTime();
                             result = this.mQClientFactory.getMQAdminImpl().searchOffset(mq, timestamp);
                         } catch (MQClientException e) {
-                            result = -1;
+                            log.warn("Compute consume offset from last offset exception, mq={}, exception={}", mq, e);
+                            throw e;
                         }
                     }
                 } else {

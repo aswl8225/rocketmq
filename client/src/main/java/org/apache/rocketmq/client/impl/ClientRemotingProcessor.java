@@ -349,8 +349,6 @@ public class ClientRemotingProcessor extends AsyncNettyRequestProcessor implemen
 
             if (requestResponseFuture.getRequestCallback() != null) {
                 requestResponseFuture.getRequestCallback().onSuccess(replyMsg);
-            } else {
-                requestResponseFuture.putResponseMessage(replyMsg);
             }
         } else {
             String bornHost = replyMsg.getBornHostString();

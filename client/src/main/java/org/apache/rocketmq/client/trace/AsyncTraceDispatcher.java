@@ -429,7 +429,7 @@ public class AsyncTraceDispatcher implements TraceDispatcher {
 
                     @Override
                     public void onException(Throwable e) {
-                        log.info("send trace data ,the traceData is " + data);
+                        log.error("send trace data failed, the traceData is {}", data, e);
                     }
                 };
                 if (traceBrokerSet.isEmpty()) {
@@ -452,7 +452,7 @@ public class AsyncTraceDispatcher implements TraceDispatcher {
                                     filterMqs.add(queue);
                                 }
                             }
-                            int index = sendWhichQueue.getAndIncrement();
+                            int index = sendWhichQueue.incrementAndGet();
                             int pos = Math.abs(index) % filterMqs.size();
                             if (pos < 0) {
                                 pos = 0;
@@ -463,7 +463,7 @@ public class AsyncTraceDispatcher implements TraceDispatcher {
                 }
 
             } catch (Exception e) {
-                log.info("send trace data,the traceData is" + data);
+                log.error("send trace data failed, the traceData is {}", data, e);
             }
         }
 

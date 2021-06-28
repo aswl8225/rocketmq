@@ -45,7 +45,7 @@ public class TopicConfigManager extends ConfigManager {
     private static final long LOCK_TIMEOUT_MILLIS = 3000;
     private static final int SCHEDULE_TOPIC_QUEUE_NUM = 18;
 
-    private transient final Lock lockTopicConfigTable = new ReentrantLock();
+    private transient final Lock topicConfigTableLock = new ReentrantLock();
 
     private final ConcurrentMap<String, TopicConfig> topicConfigTable =
         new ConcurrentHashMap<String, TopicConfig>(1024);
@@ -173,7 +173,7 @@ public class TopicConfigManager extends ConfigManager {
         boolean createNew = false;
 
         try {
-            if (this.lockTopicConfigTable.tryLock(LOCK_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS)) {
+            if (this.topicConfigTableLock.tryLock(LOCK_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS)) {
                 try {
                     /**
                      * topic不存在
@@ -211,9 +211,7 @@ public class TopicConfigManager extends ConfigManager {
                             /**
                              * topic对应的queue数量  不能超过defaultTopicConfig.getWriteQueueNums()
                              */
-                            int queueNums =
-                                clientDefaultTopicQueueNums > defaultTopicConfig.getWriteQueueNums() ? defaultTopicConfig
-                                    .getWriteQueueNums() : clientDefaultTopicQueueNums;
+                            int queueNums = Math.min(clientDefaultTopicQueueNums, defaultTopicConfig.getWriteQueueNums());
 
                             if (queueNums < 0) {
                                 queueNums = 0;
@@ -260,7 +258,7 @@ public class TopicConfigManager extends ConfigManager {
                         this.persist();
                     }
                 } finally {
-                    this.lockTopicConfigTable.unlock();
+                    this.topicConfigTableLock.unlock();
                 }
             }
         } catch (InterruptedException e) {
@@ -300,7 +298,7 @@ public class TopicConfigManager extends ConfigManager {
          * 直接创建topic
          */
         try {
-            if (this.lockTopicConfigTable.tryLock(LOCK_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS)) {
+            if (this.topicConfigTableLock.tryLock(LOCK_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS)) {
                 try {
                     topicConfig = this.topicConfigTable.get(topic);
                     if (topicConfig != null)
@@ -327,7 +325,7 @@ public class TopicConfigManager extends ConfigManager {
                      */
                     this.persist();
                 } finally {
-                    this.lockTopicConfigTable.unlock();
+                    this.topicConfigTableLock.unlock();
                 }
             }
         } catch (InterruptedException e) {
@@ -361,7 +359,7 @@ public class TopicConfigManager extends ConfigManager {
         boolean createNew = false;
 
         try {
-            if (this.lockTopicConfigTable.tryLock(LOCK_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS)) {
+            if (this.topicConfigTableLock.tryLock(LOCK_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS)) {
                 try {
                     /**
                      * 查缓存
@@ -391,7 +389,7 @@ public class TopicConfigManager extends ConfigManager {
                      */
                     this.persist();
                 } finally {
-                    this.lockTopicConfigTable.unlock();
+                    this.topicConfigTableLock.unlock();
                 }
             }
         } catch (InterruptedException e) {
