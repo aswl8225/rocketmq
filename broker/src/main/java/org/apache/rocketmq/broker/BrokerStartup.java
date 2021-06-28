@@ -114,7 +114,8 @@ public class BrokerStartup {
             /**
              * 设置RocketmqHome
              */
-            brokerConfig.setRocketmqHome("/Users/aixinde/code/aswl8225/rocketmq/distribution");
+//            brokerConfig.setRocketmqHome("/Users/aixinde/code/aswl8225/rocketmq/distribution");
+            brokerConfig.setRocketmqHome("D:\\code\\aswl8225\\rocketmq\\distribution");
             final NettyServerConfig nettyServerConfig = new NettyServerConfig();
             final NettyClientConfig nettyClientConfig = new NettyClientConfig();
 
