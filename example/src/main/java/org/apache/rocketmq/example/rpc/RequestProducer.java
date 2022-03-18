@@ -26,10 +26,10 @@ public class RequestProducer {
     public static void main(String[] args) throws MQClientException, InterruptedException {
         String producerGroup = "requestProducerGroup";
         String topic = "RequestTopic";
-        long ttl = 3000;
+        long ttl = 10000;
 
         DefaultMQProducer producer = new DefaultMQProducer(producerGroup);
-        producer.setNamesrvAddr("192.168.50.61:9876");
+        producer.setNamesrvAddr("localhost:9876");
         producer.setInstanceName("request1");
         producer.start();
 

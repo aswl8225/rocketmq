@@ -43,14 +43,14 @@ public class ResponseConsumer {
 
         // create a producer to send reply message
         DefaultMQProducer replyProducer = new DefaultMQProducer(producerGroup);
-        replyProducer.setNamesrvAddr("192.168.50.61:9876");
+        replyProducer.setNamesrvAddr("localhost:9876");
         replyProducer.setInstanceName("reply1");
         replyProducer.start();
 
         // create consumer
         DefaultMQPushConsumer consumer = new DefaultMQPushConsumer(consumerGroup);
         consumer.setConsumeFromWhere(ConsumeFromWhere.CONSUME_FROM_LAST_OFFSET);
-        consumer.setNamesrvAddr("192.168.50.61:9876");
+        consumer.setNamesrvAddr("localhost:9876");
         consumer.setInstanceName("test1");
 
         // recommend client configs
@@ -67,7 +67,7 @@ public class ResponseConsumer {
                          * 获取消息的REPLY_TO_CLIENT   即producer对应得clientId
                          */
                         String replyTo = MessageUtil.getReplyToClient(msg);
-                        byte[] replyContent = "reply message contents.收到回复就是地方就收到回复".getBytes();
+                        byte[] replyContent = "reply message contents.".getBytes();
                         // create reply message with given util, do not create reply message by yourself
 
                         MessageAccessor.putProperty(msg, MessageConst.PROPERTY_CLUSTER, "DefaultCluster");
@@ -80,7 +80,7 @@ public class ResponseConsumer {
                         /**
                          * 发送reply消息
                          */
-                        SendResult replyResult = replyProducer.send(replyMessage, 3000);
+                        SendResult replyResult = replyProducer.send(replyMessage, 30000);
                         System.out.printf("reply to %s , %s %n", replyTo, replyResult.toString());
                     } catch (MQClientException | RemotingException | MQBrokerException | InterruptedException e) {
                         e.printStackTrace();

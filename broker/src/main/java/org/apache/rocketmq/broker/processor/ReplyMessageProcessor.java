@@ -165,7 +165,7 @@ public class ReplyMessageProcessor extends AbstractSendMessageProcessor implemen
         msgInner.setReconsumeTimes(requestHeader.getReconsumeTimes() == null ? 0 : requestHeader.getReconsumeTimes());
 
         /**
-         *
+         * 通知producer
          */
         PushReplyResult pushReplyResult = this.pushReplyMessage(ctx, requestHeader, msgInner);
         this.handlePushReplyResult(pushReplyResult, response, responseHeader, queueIdInt);
