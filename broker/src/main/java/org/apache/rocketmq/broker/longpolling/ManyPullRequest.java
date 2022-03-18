@@ -50,4 +50,8 @@ public class ManyPullRequest {
 
         return null;
     }
+
+    public ArrayList<PullRequest> getPullRequestList() {
+        return pullRequestList;
+    }
 }

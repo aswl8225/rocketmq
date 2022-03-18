@@ -417,7 +417,7 @@ public class TopicConfigManager extends ConfigManager {
                 topicConfig.setTopicSysFlag(TopicSysFlag.clearUnitFlag(oldTopicSysFlag));
             }
 
-            log.info("update topic sys flag. oldTopicSysFlag={}, newTopicSysFlag", oldTopicSysFlag,
+            log.info("update topic sys flag. oldTopicSysFlag={}, newTopicSysFlag={}", oldTopicSysFlag,
                 topicConfig.getTopicSysFlag());
 
             this.topicConfigTable.put(topic, topicConfig);
@@ -435,9 +435,11 @@ public class TopicConfigManager extends ConfigManager {
             int oldTopicSysFlag = topicConfig.getTopicSysFlag();
             if (hasUnitSub) {
                 topicConfig.setTopicSysFlag(TopicSysFlag.setUnitSubFlag(oldTopicSysFlag));
+            } else {
+                topicConfig.setTopicSysFlag(TopicSysFlag.clearUnitSubFlag(oldTopicSysFlag));
             }
 
-            log.info("update topic sys flag. oldTopicSysFlag={}, newTopicSysFlag", oldTopicSysFlag,
+            log.info("update topic sys flag. oldTopicSysFlag={}, newTopicSysFlag={}", oldTopicSysFlag,
                 topicConfig.getTopicSysFlag());
 
             this.topicConfigTable.put(topic, topicConfig);

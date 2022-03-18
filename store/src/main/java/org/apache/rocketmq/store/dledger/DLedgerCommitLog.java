@@ -37,8 +37,6 @@ import java.util.HashMap;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.TimeUnit;
-
 import org.apache.rocketmq.common.UtilAll;
 import org.apache.rocketmq.common.message.MessageAccessor;
 import org.apache.rocketmq.common.message.MessageConst;
@@ -113,7 +111,7 @@ public class DLedgerCommitLog extends CommitLog {
         dLedgerConfig.setPreferredLeaderId(defaultMessageStore.getMessageStoreConfig().getPreferredLeaderId());
         dLedgerConfig.setEnableBatchPush(defaultMessageStore.getMessageStoreConfig().isEnableBatchPush());
 
-        id = Integer.valueOf(dLedgerConfig.getSelfId().substring(1)) + 1;
+        id = Integer.parseInt(dLedgerConfig.getSelfId().substring(1)) + 1;
         dLedgerServer = new DLedgerServer(dLedgerConfig);
         dLedgerFileStore = (DLedgerMmapFileStore) dLedgerServer.getdLedgerStore();
         /**
@@ -574,7 +572,7 @@ public class DLedgerCommitLog extends CommitLog {
         }
     }
 
-    @Override
+    
     public PutMessageResult putMessage(final MessageExtBrokerInner msg) {
 
         StoreStatsService storeStatsService = this.defaultMessageStore.getStoreStatsService();
@@ -926,8 +924,8 @@ public class DLedgerCommitLog extends CommitLog {
             PutMessageResult putMessageResult = new PutMessageResult(putMessageStatus, appendResult);
             if (putMessageStatus == PutMessageStatus.PUT_OK) {
                 // Statistics
-                storeStatsService.getSinglePutMessageTopicTimesTotal(finalTopic).incrementAndGet();
-                storeStatsService.getSinglePutMessageTopicSizeTotal(msg.getTopic()).addAndGet(appendResult.getWroteBytes());
+                storeStatsService.getSinglePutMessageTopicTimesTotal(finalTopic).add(1);
+                storeStatsService.getSinglePutMessageTopicSizeTotal(msg.getTopic()).add(appendResult.getWroteBytes());
             }
             return putMessageResult;
         });
@@ -974,7 +972,7 @@ public class DLedgerCommitLog extends CommitLog {
         msgIdBuilder.setLength(0);
         long elapsedTimeInLock;
         long queueOffset;
-        long msgNum = 0;
+        int msgNum = 0;
         try {
             beginTimeInDledgerLock = this.defaultMessageStore.getSystemClock().now();
             queueOffset = getQueueOffsetByKey(encodeResult.queueOffsetKey, tranType);
@@ -983,11 +981,13 @@ public class DLedgerCommitLog extends CommitLog {
             request.setGroup(dLedgerConfig.getGroup());
             request.setRemoteId(dLedgerServer.getMemberState().getSelfId());
             request.setBatchMsgs(encodeResult.batchData);
-            dledgerFuture = (BatchAppendFuture<AppendEntryResponse>) dLedgerServer.handleAppend(request);
-            if (dledgerFuture.getPos() == -1) {
-                log.warn("HandleAppend return false due to error code {}", dledgerFuture.get().getCode());
+            AppendFuture<AppendEntryResponse> appendFuture = (AppendFuture<AppendEntryResponse>) dLedgerServer.handleAppend(request);
+            if (appendFuture.getPos() == -1) {
+                log.warn("HandleAppend return false due to error code {}", appendFuture.get().getCode());
                 return CompletableFuture.completedFuture(new PutMessageResult(PutMessageStatus.OS_PAGECACHE_BUSY, new AppendMessageResult(AppendMessageStatus.UNKNOWN_ERROR)));
             }
+            dledgerFuture = (BatchAppendFuture<AppendEntryResponse>) appendFuture;
+
             long wroteOffset = 0;
 
             int msgIdLength = (messageExtBatch.getSysFlag() & MessageSysFlag.STOREHOSTADDRESS_V6_FLAG) == 0 ? 4 + 4 + 8 : 16 + 4 + 8;
@@ -1013,6 +1013,7 @@ public class DLedgerCommitLog extends CommitLog {
             elapsedTimeInLock = this.defaultMessageStore.getSystemClock().now() - beginTimeInDledgerLock;
             appendResult = new AppendMessageResult(AppendMessageStatus.PUT_OK, firstWroteOffset, encodeResult.totalMsgLen,
                     msgIdBuilder.toString(), System.currentTimeMillis(), queueOffset, elapsedTimeInLock);
+            appendResult.setMsgNum(msgNum);
             DLedgerCommitLog.this.topicQueueTable.put(encodeResult.queueOffsetKey, queueOffset + msgNum);
         } catch (Exception e) {
             log.error("Put message error", e);
@@ -1050,8 +1051,8 @@ public class DLedgerCommitLog extends CommitLog {
             PutMessageResult putMessageResult = new PutMessageResult(putMessageStatus, appendResult);
             if (putMessageStatus == PutMessageStatus.PUT_OK) {
                 // Statistics
-                storeStatsService.getSinglePutMessageTopicTimesTotal(messageExtBatch.getTopic()).incrementAndGet();
-                storeStatsService.getSinglePutMessageTopicSizeTotal(messageExtBatch.getTopic()).addAndGet(appendResult.getWroteBytes());
+                storeStatsService.getSinglePutMessageTopicTimesTotal(messageExtBatch.getTopic()).add(appendResult.getMsgNum());
+                storeStatsService.getSinglePutMessageTopicSizeTotal(messageExtBatch.getTopic()).add(appendResult.getWroteBytes());
             }
             return putMessageResult;
         });
@@ -1115,7 +1116,7 @@ public class DLedgerCommitLog extends CommitLog {
     }
 
     @Override
-    public boolean appendData(long startOffset, byte[] data) {
+    public boolean appendData(long startOffset, byte[] data, int dataStart, int dataLength) {
         //the old ha service will invoke method, here to prevent it
         return false;
     }

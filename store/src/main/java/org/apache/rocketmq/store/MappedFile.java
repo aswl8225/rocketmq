@@ -37,6 +37,7 @@ import org.apache.rocketmq.logging.InternalLogger;
 import org.apache.rocketmq.logging.InternalLoggerFactory;
 import org.apache.rocketmq.common.message.MessageExt;
 import org.apache.rocketmq.common.message.MessageExtBatch;
+import org.apache.rocketmq.store.CommitLog.PutMessageContext;
 import org.apache.rocketmq.store.config.FlushDiskType;
 import org.apache.rocketmq.store.util.LibC;
 import sun.nio.ch.DirectBuffer;
@@ -250,33 +251,18 @@ public class MappedFile extends ReferenceResource {
         return fileChannel;
     }
 
-    /**
-     * 消息缓存
-     * @param msg
-     * @param cb
-     * @return
-     */
-    public AppendMessageResult appendMessage(final MessageExtBrokerInner msg, final AppendMessageCallback cb) {
-        return appendMessagesInner(msg, cb);
+    public AppendMessageResult appendMessage(final MessageExtBrokerInner msg, final AppendMessageCallback cb,
+            PutMessageContext putMessageContext) {
+        return appendMessagesInner(msg, cb, putMessageContext);
     }
 
-    /**
-     * 批量消息存储
-     * @param messageExtBatch
-     * @param cb
-     * @return
-     */
-    public AppendMessageResult appendMessages(final MessageExtBatch messageExtBatch, final AppendMessageCallback cb) {
-        return appendMessagesInner(messageExtBatch, cb);
+    public AppendMessageResult appendMessages(final MessageExtBatch messageExtBatch, final AppendMessageCallback cb,
+            PutMessageContext putMessageContext) {
+        return appendMessagesInner(messageExtBatch, cb, putMessageContext);
     }
 
-    /**
-     * 消息缓存
-     * @param messageExt
-     * @param cb
-     * @return
-     */
-    public AppendMessageResult appendMessagesInner(final MessageExt messageExt, final AppendMessageCallback cb) {
+    public AppendMessageResult appendMessagesInner(final MessageExt messageExt, final AppendMessageCallback cb,
+            PutMessageContext putMessageContext) {
         assert messageExt != null;
         assert cb != null;
         //文件当前写入位置
@@ -293,12 +279,14 @@ public class MappedFile extends ReferenceResource {
              * 单个消息存储
              */
             if (messageExt instanceof MessageExtBrokerInner) {
-                result = cb.doAppend(this.getFileFromOffset(), byteBuffer, this.fileSize - currentPos, (MessageExtBrokerInner) messageExt);
+                result = cb.doAppend(this.getFileFromOffset(), byteBuffer, this.fileSize - currentPos,
+                        (MessageExtBrokerInner) messageExt, putMessageContext);
             } else if (messageExt instanceof MessageExtBatch) {
                 /**
                  * 批量消息
                  */
-                result = cb.doAppend(this.getFileFromOffset(), byteBuffer, this.fileSize - currentPos, (MessageExtBatch) messageExt);
+                result = cb.doAppend(this.getFileFromOffset(), byteBuffer, this.fileSize - currentPos,
+                        (MessageExtBatch) messageExt, putMessageContext);
             } else {
                 return new AppendMessageResult(AppendMessageStatus.UNKNOWN_ERROR);
             }
@@ -326,8 +314,9 @@ public class MappedFile extends ReferenceResource {
          */
         if ((currentPos + data.length) <= this.fileSize) {
             try {
-                this.fileChannel.position(currentPos);
-                this.fileChannel.write(ByteBuffer.wrap(data));
+                ByteBuffer buf = this.mappedByteBuffer.slice();
+                buf.position(currentPos);
+                buf.put(data);
             } catch (Throwable e) {
                 log.error("Error occurred when append message to mappedFile.", e);
             }
@@ -349,8 +338,9 @@ public class MappedFile extends ReferenceResource {
 
         if ((currentPos + length) <= this.fileSize) {
             try {
-                this.fileChannel.position(currentPos);
-                this.fileChannel.write(ByteBuffer.wrap(data, offset, length));
+                ByteBuffer buf = this.mappedByteBuffer.slice();
+                buf.position(currentPos);
+                buf.put(data, offset, length);
             } catch (Throwable e) {
                 log.error("Error occurred when append message to mappedFile.", e);
             }
@@ -420,7 +410,7 @@ public class MappedFile extends ReferenceResource {
                 /**
                  * commit  从堆外内存池中将数据刷到内存fileChannel
                  */
-                commit0(commitLeastPages);
+                commit0();
                 this.release();
             } else {
                 log.warn("in commit, hold failed, commit offset = " + this.committedPosition.get());
@@ -438,19 +428,17 @@ public class MappedFile extends ReferenceResource {
 
         return this.committedPosition.get();
     }
-
     /**
      * 从堆外内存池中将数据刷到内存fileChannel
      * @param commitLeastPages
      */
-    protected void commit0(final int commitLeastPages) {
+    protected void commit0() {
         int writePos = this.wrotePosition.get();
         int lastCommittedPosition = this.committedPosition.get();
-
-        /**
-         * 将数据写入fileChannel  并更新committedPosition为wrotePosition
-         */
-        if (writePos - lastCommittedPosition > commitLeastPages) {
+/**
+ * 将数据写入fileChannel  并更新committedPosition为wrotePosition
+ */
+        if (writePos - lastCommittedPosition > 0) {
             try {
                 ByteBuffer byteBuffer = writeBuffer.slice();
                 byteBuffer.position(lastCommittedPosition);

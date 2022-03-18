@@ -427,7 +427,23 @@ public class MessageDecoder {
     }
 
     public static String messageProperties2String(Map<String, String> properties) {
-        StringBuilder sb = new StringBuilder();
+        if (properties == null) {
+            return "";
+        }
+        int len = 0;
+        for (final Map.Entry<String, String> entry : properties.entrySet()) {
+            final String name = entry.getKey();
+            final String value = entry.getValue();
+            if (value == null) {
+                continue;
+            }
+            if (name != null) {
+                len += name.length();
+            }
+            len += value.length();
+            len += 2; // separator
+        }
+        StringBuilder sb = new StringBuilder(len);
         if (properties != null) {
             for (final Map.Entry<String, String> entry : properties.entrySet()) {
                 final String name = entry.getKey();
@@ -441,6 +457,9 @@ public class MessageDecoder {
                 sb.append(value);
                 sb.append(PROPERTY_SEPARATOR);
             }
+            if (sb.length() > 0) {
+                sb.deleteCharAt(sb.length() - 1);
+            }
         }
         return sb.toString();
     }
@@ -453,12 +472,22 @@ public class MessageDecoder {
     public static Map<String, String> string2messageProperties(final String properties) {
         Map<String, String> map = new HashMap<String, String>();
         if (properties != null) {
-            String[] items = properties.split(String.valueOf(PROPERTY_SEPARATOR));
-            for (String i : items) {
-                String[] nv = i.split(String.valueOf(NAME_VALUE_SEPARATOR));
-                if (2 == nv.length) {
-                    map.put(nv[0], nv[1]);
+            int len = properties.length();
+            int index = 0;
+            while (index < len) {
+                int newIndex = properties.indexOf(PROPERTY_SEPARATOR, index);
+                if (newIndex < 0) {
+                    newIndex = len;
                 }
+                if (newIndex - index >= 3) {
+                    int kvSepIndex = properties.indexOf(NAME_VALUE_SEPARATOR, index);
+                    if (kvSepIndex > index && kvSepIndex < newIndex - 1) {
+                        String k = properties.substring(index, kvSepIndex);
+                        String v = properties.substring(kvSepIndex + 1, newIndex);
+                        map.put(k, v);
+                    }
+                }
+                index = newIndex + 1;
             }
         }
 
@@ -483,7 +512,10 @@ public class MessageDecoder {
          */
         byte[] propertiesBytes = properties.getBytes(CHARSET_UTF8);
         //note properties length must not more than Short.MAX
-        short propertiesLength = (short) propertiesBytes.length;
+        int propsLen = propertiesBytes.length;
+        if (propsLen > Short.MAX_VALUE)
+            throw new RuntimeException(String.format("Properties size of message exceeded, properties size: {}, maxSize: {}.", propsLen, Short.MAX_VALUE));
+        short propertiesLength = (short) propsLen;
         int sysFlag = message.getFlag();
         int storeSize = 4 // 1 TOTALSIZE
             + 4 // 2 MAGICCOD

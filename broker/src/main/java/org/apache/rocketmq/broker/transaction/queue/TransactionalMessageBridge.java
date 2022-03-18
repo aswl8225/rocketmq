@@ -454,11 +454,11 @@ public class TransactionalMessageBridge {
      * Use this function while transaction msg is committed or rollback write a flag 'd' to operation queue for the
      * msg's offset
      *
-     * @param messageExt Op message
-     * @param messageQueue Op message queue
+     * @param prepareMessage Half message
+     * @param messageQueue Half message queue
      * @return This method will always return true.
      */
-    private boolean addRemoveTagInTransactionOp(MessageExt messageExt, MessageQueue messageQueue) {
+    private boolean addRemoveTagInTransactionOp(MessageExt prepareMessage, MessageQueue messageQueue) {
         /**
          * RMQ_SYS_TRANS_OP_HALF_TOPIC
          *
@@ -467,8 +467,7 @@ public class TransactionalMessageBridge {
          * 消息的body部分  存储得是messageExt的QueueOffset
          */
         Message message = new Message(TransactionalMessageUtil.buildOpTopic(), TransactionalMessageUtil.REMOVETAG,
-            String.valueOf(messageExt.getQueueOffset()).getBytes(TransactionalMessageUtil.charset));
-
+            String.valueOf(prepareMessage.getQueueOffset()).getBytes(TransactionalMessageUtil.charset));
         /**
          * 向RMQ_SYS_TRANS_OP_HALF_TOPIC存入消息
          */

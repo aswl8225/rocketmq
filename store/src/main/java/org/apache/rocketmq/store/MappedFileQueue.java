@@ -20,6 +20,7 @@ import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Comparator;
 import java.util.Iterator;
 import java.util.List;
 import java.util.ListIterator;
@@ -37,13 +38,13 @@ public class MappedFileQueue {
 
     private final String storePath;
 
-    private final int mappedFileSize;
+    protected final int mappedFileSize;
 
-    private final CopyOnWriteArrayList<MappedFile> mappedFiles = new CopyOnWriteArrayList<MappedFile>();
+    protected final CopyOnWriteArrayList<MappedFile> mappedFiles = new CopyOnWriteArrayList<MappedFile>();
 
     private final AllocateMappedFileService allocateMappedFileService;
 
-    private long flushedWhere = 0;
+    protected long flushedWhere = 0;
     private long committedWhere = 0;
 
     private volatile long storeTimestamp = 0;
@@ -192,6 +193,7 @@ public class MappedFileQueue {
         }
     }
 
+
     public boolean load() {
         /**
          * 读取store\commitlog
@@ -202,40 +204,41 @@ public class MappedFileQueue {
          * 读取store\commitlog下的文件
          * 读取store\consumequeue\{topic}\{queueId}下的文件
          */
-        File[] files = dir.listFiles();
-        if (files != null) {
-            // ascending order
-            Arrays.sort(files);
-            for (File file : files) {
-                /**
-                 * 文件大小应该为1g   1024*1024*1024
-                 * 文件大小应该为5860kb
-                 */
-                if (file.length() != this.mappedFileSize) {
-                    log.warn(file + "\t" + file.length()
+        File[] ls = dir.listFiles();
+        if (ls != null) {
+            return doLoad(Arrays.asList(ls));
+        }
+        return true;
+    }
+
+    public boolean doLoad(List<File> files) {
+        // ascending order
+        files.sort(Comparator.comparing(File::getName));
+
+        for (File file : files) {
+            if (file.length() != this.mappedFileSize) {
+                log.warn(file + "\t" + file.length()
                         + " length not matched message store config value, please check it manually");
-                    return false;
-                }
+                return false;
+            }
 
-                try {
-                    /**
-                     * 实例化mappedFile
-                     *
-                     */
-                    MappedFile mappedFile = new MappedFile(file.getPath(), mappedFileSize);
+            try {
+                /**
+                 * 实例化mappedFile
+                 *
+                 */
+                MappedFile mappedFile = new MappedFile(file.getPath(), mappedFileSize);
 
-                    mappedFile.setWrotePosition(this.mappedFileSize);
-                    mappedFile.setFlushedPosition(this.mappedFileSize);
-                    mappedFile.setCommittedPosition(this.mappedFileSize);
-                    this.mappedFiles.add(mappedFile);
-                    log.info("load " + file.getPath() + " OK");
-                } catch (IOException e) {
-                    log.error("load file " + file + " error", e);
-                    return false;
-                }
+                mappedFile.setWrotePosition(this.mappedFileSize);
+                mappedFile.setFlushedPosition(this.mappedFileSize);
+                mappedFile.setCommittedPosition(this.mappedFileSize);
+                this.mappedFiles.add(mappedFile);
+                log.info("load " + file.getPath() + " OK");
+            } catch (IOException e) {
+                log.error("load file " + file + " error", e);
+                return false;
             }
         }
-
         return true;
     }
 
@@ -282,50 +285,58 @@ public class MappedFileQueue {
          * 需要新建mappedFile
          */
         if (createOffset != -1 && needCreate) {
-            /**
-             * 下一个文件   例如：this.storePath=C:\Users\Administrator\store\consumequeue\DefaultCluster\3
-             */
-            String nextFilePath = this.storePath + File.separator + UtilAll.offset2FileName(createOffset);
-            /**
-             * 下下个文件
-             */
-            String nextNextFilePath = this.storePath + File.separator
-                + UtilAll.offset2FileName(createOffset + this.mappedFileSize);
-            MappedFile mappedFile = null;
-
-            /**
-             * 每次创建两个   第一个成功后返回  第二个异步创建
-             *
-             * 堆外内存
-             */
-            if (this.allocateMappedFileService != null) {
-                mappedFile = this.allocateMappedFileService.putRequestAndReturnMappedFile(nextFilePath,
-                    nextNextFilePath, this.mappedFileSize);
-            } else {
-                try {
-                    /**
-                     * 新建mappedFile
-                     */
-                    mappedFile = new MappedFile(nextFilePath, this.mappedFileSize);
-                } catch (IOException e) {
-                    log.error("create mappedFile exception", e);
-                }
-            }
-
-            if (mappedFile != null) {
-                /**
-                 * mappedFiles列表为空 mappedFile为第一个文件
-                 */
-                if (this.mappedFiles.isEmpty()) {
-                    mappedFile.setFirstCreateInQueue(true);
-                }
-                this.mappedFiles.add(mappedFile);
-            }
-
-            return mappedFile;
+            return tryCreateMappedFile(createOffset);
         }
 
         return mappedFileLast;
+    }
+
+    protected MappedFile tryCreateMappedFile(long createOffset) {
+        /**
+         * 下一个文件   例如：this.storePath=C:\Users\Administrator\store\consumequeue\DefaultCluster\3
+         */
+        String nextFilePath = this.storePath + File.separator + UtilAll.offset2FileName(createOffset);
+        /**
+         * 下下个文件
+         */
+        String nextNextFilePath = this.storePath + File.separator + UtilAll.offset2FileName(createOffset
+                + this.mappedFileSize);
+        return doCreateMappedFile(nextFilePath, nextNextFilePath);
+    }
+
+    protected MappedFile doCreateMappedFile(String nextFilePath, String nextNextFilePath) {
+        MappedFile mappedFile = null;
+
+        /**
+         * 每次创建两个   第一个成功后返回  第二个异步创建
+         *
+         * 堆外内存
+         */
+        if (this.allocateMappedFileService != null) {
+            mappedFile = this.allocateMappedFileService.putRequestAndReturnMappedFile(nextFilePath,
+                    nextNextFilePath, this.mappedFileSize);
+        } else {
+            try {
+                /**
+                 * 新建mappedFile
+                 */
+                mappedFile = new MappedFile(nextFilePath, this.mappedFileSize);
+            } catch (IOException e) {
+                log.error("create mappedFile exception", e);
+            }
+        }
+
+        if (mappedFile != null) {
+            /**
+             * mappedFiles列表为空 mappedFile为第一个文件
+             */
+            if (this.mappedFiles.isEmpty()) {
+                mappedFile.setFirstCreateInQueue(true);
+            }
+            this.mappedFiles.add(mappedFile);
+        }
+
+        return mappedFile;
     }
 
     /**
