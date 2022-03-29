@@ -16,18 +16,6 @@
  */
 package org.apache.rocketmq.store;
 
-import java.net.Inet6Address;
-import java.net.InetSocketAddress;
-import java.nio.ByteBuffer;
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
-
 import org.apache.rocketmq.common.ServiceThread;
 import org.apache.rocketmq.common.UtilAll;
 import org.apache.rocketmq.common.constant.LoggerName;
@@ -46,17 +34,28 @@ import org.apache.rocketmq.logging.InternalLogger;
 import org.apache.rocketmq.logging.InternalLoggerFactory;
 import org.apache.rocketmq.store.config.BrokerRole;
 import org.apache.rocketmq.store.config.FlushDiskType;
+import org.apache.rocketmq.store.config.MessageStoreConfig;
 import org.apache.rocketmq.store.ha.HAService;
 import org.apache.rocketmq.store.schedule.ScheduleMessageService;
 
+import java.net.Inet4Address;
+import java.net.Inet6Address;
+import java.net.InetAddress;
+import java.net.InetSocketAddress;
+import java.net.SocketAddress;
 import java.nio.ByteBuffer;
-import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
+import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.TimeUnit;
+import java.util.Set;
+import java.util.concurrent.*;
+import java.util.function.Supplier;
 
+/**
+ * Store all metadata downtime for recovery, data protection reliability
+ */
 /**
  * Store all metadata downtime for recovery, data protection reliability
  * 1    msgSize	                     4	代表这个消息的大小
@@ -80,10 +79,6 @@ import java.util.concurrent.TimeUnit;
  * 19	propertiesLength	         2	属性值大小
  * 20	properties	                 ?   propertiesLength	propertiesLength大小的属性数据
  */
-
-/**
- * Store all metadata downtime for recovery, data protection reliability
- */
 public class CommitLog {
     // Message's MAGIC CODE daa320a7
     public final static int MESSAGE_MAGIC_CODE = -626843481;
@@ -99,22 +94,37 @@ public class CommitLog {
     private final FlushCommitLogService commitLogService;
 
     private final AppendMessageCallback appendMessageCallback;
-    private final ThreadLocal<MessageExtBatchEncoder> batchEncoderThreadLocal;
+    private final ThreadLocal<PutMessageThreadLocal> putMessageThreadLocal;
     /**
      * 这个offset是个自增值不是真正的consume queue的偏移量，可以代表这个consumeQueue队列或者tranStateTable队列中消息的个数，
      * 若是非事务消息或者commit事务消息，可以通过这个值查找到consumeQueue中数据，QUEUEOFFSET * 20才是偏移地址；
      * 若是PREPARED或者Rollback事务，则可以通过该值从tranStateTable中查找数据
      */
     protected HashMap<String/* topic-queueid */, Long/* offset */> topicQueueTable = new HashMap<String, Long>(1024);
+    protected Map<String/* topic-queueid */, Long/* offset */> lmqTopicQueueTable = new ConcurrentHashMap<>(1024);
     protected volatile long confirmOffset = -1L;
 
     private volatile long beginTimeInLock = 0;
 
     protected final PutMessageLock putMessageLock;
 
+    private volatile Set<String> fullStorePaths = Collections.emptySet();
+
+    private final MultiDispatch multiDispatch;
+    private final FlushDiskWatcher flushDiskWatcher;
+
     public CommitLog(final DefaultMessageStore defaultMessageStore) {
-        this.mappedFileQueue = new MappedFileQueue(defaultMessageStore.getMessageStoreConfig().getStorePathCommitLog(),
-            defaultMessageStore.getMessageStoreConfig().getMappedFileSizeCommitLog(), defaultMessageStore.getAllocateMappedFileService());
+        String storePath = defaultMessageStore.getMessageStoreConfig().getStorePathCommitLog();
+        if (storePath.contains(MessageStoreConfig.MULTI_PATH_SPLITTER)) {
+            this.mappedFileQueue = new MultiPathMappedFileQueue(defaultMessageStore.getMessageStoreConfig(),
+                    defaultMessageStore.getMessageStoreConfig().getMappedFileSizeCommitLog(),
+                    defaultMessageStore.getAllocateMappedFileService(), this::getFullStorePaths);
+        } else {
+            this.mappedFileQueue = new MappedFileQueue(storePath,
+                    defaultMessageStore.getMessageStoreConfig().getMappedFileSizeCommitLog(),
+                    defaultMessageStore.getAllocateMappedFileService());
+        }
+
         this.defaultMessageStore = defaultMessageStore;
 
         if (FlushDiskType.SYNC_FLUSH == defaultMessageStore.getMessageStoreConfig().getFlushDiskType()) {
@@ -138,10 +148,10 @@ public class CommitLog {
          * 设置最大消息size  4m
          */
         this.appendMessageCallback = new DefaultAppendMessageCallback(defaultMessageStore.getMessageStoreConfig().getMaxMessageSize());
-        batchEncoderThreadLocal = new ThreadLocal<MessageExtBatchEncoder>() {
+        putMessageThreadLocal = new ThreadLocal<PutMessageThreadLocal>() {
             @Override
-            protected MessageExtBatchEncoder initialValue() {
-                return new MessageExtBatchEncoder(defaultMessageStore.getMessageStoreConfig().getMaxMessageSize());
+            protected PutMessageThreadLocal initialValue() {
+                return new PutMessageThreadLocal(defaultMessageStore.getMessageStoreConfig().getMaxMessageSize());
             }
         };
         /**
@@ -149,6 +159,21 @@ public class CommitLog {
          */
         this.putMessageLock = defaultMessageStore.getMessageStoreConfig().isUseReentrantLockWhenPutMessage() ? new PutMessageReentrantLock() : new PutMessageSpinLock();
 
+        this.multiDispatch = new MultiDispatch(defaultMessageStore, this);
+
+        flushDiskWatcher = new FlushDiskWatcher();
+    }
+
+    public void setFullStorePaths(Set<String> fullStorePaths) {
+        this.fullStorePaths = fullStorePaths;
+    }
+
+    public Set<String> getFullStorePaths() {
+        return fullStorePaths;
+    }
+
+    public ThreadLocal<PutMessageThreadLocal> getPutMessageThreadLocal() {
+        return putMessageThreadLocal;
     }
 
     /**
@@ -167,6 +192,9 @@ public class CommitLog {
          */
         this.flushCommitLogService.start();
 
+        flushDiskWatcher.setDaemon(true);
+        flushDiskWatcher.start();
+
         /**
          * 启动堆外内存    CommitRealTimeService   执行commit操作   写入FileChannel   再FlushRealTimeService刷盘
          */
@@ -181,6 +209,8 @@ public class CommitLog {
         }
 
         this.flushCommitLogService.shutdown();
+
+        flushDiskWatcher.shutdown(true);
     }
 
     public long flush() {
@@ -801,6 +831,14 @@ public class CommitLog {
         return beginTimeInLock;
     }
 
+    private String generateKey(StringBuilder keyBuilder, MessageExt messageExt) {
+        keyBuilder.setLength(0);
+        keyBuilder.append(messageExt.getTopic());
+        keyBuilder.append('-');
+        keyBuilder.append(messageExt.getQueueId());
+        return keyBuilder.toString();
+    }
+
     public CompletableFuture<PutMessageResult> asyncPutMessage(final MessageExtBrokerInner msg) {
         // Set the storage time
         msg.setStoreTimestamp(System.currentTimeMillis());
@@ -813,8 +851,7 @@ public class CommitLog {
         StoreStatsService storeStatsService = this.defaultMessageStore.getStoreStatsService();
 
         String topic = msg.getTopic();
-        int queueId = msg.getQueueId();
-
+//        int queueId msg.getQueueId();
         final int tranType = MessageSysFlag.getTransactionValue(msg.getSysFlag());
         /**
          * 普通股事务消息或事务提交
@@ -836,7 +873,7 @@ public class CommitLog {
                 /**
                  * 对应的延迟队列的queueid  delayLevel-1
                  */
-                queueId = ScheduleMessageService.delayLevel2QueueId(msg.getDelayTimeLevel());
+                int queueId = ScheduleMessageService.delayLevel2QueueId(msg.getDelayTimeLevel());
 
                 // Backup real topic, queueId
                 /**
@@ -854,15 +891,33 @@ public class CommitLog {
             }
         }
 
+        InetSocketAddress bornSocketAddress = (InetSocketAddress) msg.getBornHost();
+        if (bornSocketAddress.getAddress() instanceof Inet6Address) {
+            msg.setBornHostV6Flag();
+        }
+
+        InetSocketAddress storeSocketAddress = (InetSocketAddress) msg.getStoreHost();
+        if (storeSocketAddress.getAddress() instanceof Inet6Address) {
+            msg.setStoreHostAddressV6Flag();
+        }
+
+        PutMessageThreadLocal putMessageThreadLocal = this.putMessageThreadLocal.get();
+        PutMessageResult encodeResult = putMessageThreadLocal.getEncoder().encode(msg);
+        if (encodeResult != null) {
+            return CompletableFuture.completedFuture(encodeResult);
+        }
+        msg.setEncodedBuff(putMessageThreadLocal.getEncoder().encoderBuffer);
+        PutMessageContext putMessageContext = new PutMessageContext(generateKey(putMessageThreadLocal.getKeyBuilder(), msg));
+
         long elapsedTimeInLock = 0;
         MappedFile unlockMappedFile = null;
-        /**
-         * 获取最后一个MappedFile
-         */
-        MappedFile mappedFile = this.mappedFileQueue.getLastMappedFile();
 
         putMessageLock.lock(); //spin or ReentrantLock ,depending on store config
         try {
+            /**
+             * 获取最后一个MappedFile
+             */
+            MappedFile mappedFile = this.mappedFileQueue.getLastMappedFile();
             long beginLockTimestamp = this.defaultMessageStore.getSystemClock().now();
             this.beginTimeInLock = beginLockTimestamp;
 
@@ -881,16 +936,14 @@ public class CommitLog {
              */
             if (null == mappedFile) {
                 log.error("create mapped file1 error, topic: " + msg.getTopic() + " clientAddr: " + msg.getBornHostString());
-                beginTimeInLock = 0;
                 return CompletableFuture.completedFuture(new PutMessageResult(PutMessageStatus.CREATE_MAPEDFILE_FAILED, null));
             }
-
             /**
              * 存储消息
              * 存储消息
              * 存储消息
              */
-            result = mappedFile.appendMessage(msg, this.appendMessageCallback);
+            result = mappedFile.appendMessage(msg, this.appendMessageCallback, putMessageContext);
             switch (result.getStatus()) {
                 case PUT_OK:
                     break;
@@ -904,29 +957,25 @@ public class CommitLog {
                     if (null == mappedFile) {
                         // XXX: warn and notify me
                         log.error("create mapped file2 error, topic: " + msg.getTopic() + " clientAddr: " + msg.getBornHostString());
-                        beginTimeInLock = 0;
                         return CompletableFuture.completedFuture(new PutMessageResult(PutMessageStatus.CREATE_MAPEDFILE_FAILED, result));
                     }
                     /**
                      * 再次写入消息
                      */
-                    result = mappedFile.appendMessage(msg, this.appendMessageCallback);
+                    result = mappedFile.appendMessage(msg, this.appendMessageCallback, putMessageContext);
                     break;
                 case MESSAGE_SIZE_EXCEEDED:
                 case PROPERTIES_SIZE_EXCEEDED:
-                    beginTimeInLock = 0;
                     return CompletableFuture.completedFuture(new PutMessageResult(PutMessageStatus.MESSAGE_ILLEGAL, result));
                 case UNKNOWN_ERROR:
-                    beginTimeInLock = 0;
                     return CompletableFuture.completedFuture(new PutMessageResult(PutMessageStatus.UNKNOWN_ERROR, result));
                 default:
-                    beginTimeInLock = 0;
                     return CompletableFuture.completedFuture(new PutMessageResult(PutMessageStatus.UNKNOWN_ERROR, result));
             }
 
             elapsedTimeInLock = this.defaultMessageStore.getSystemClock().now() - beginLockTimestamp;
-            beginTimeInLock = 0;
         } finally {
+            beginTimeInLock = 0;
             putMessageLock.unlock();
         }
 
@@ -941,8 +990,8 @@ public class CommitLog {
         PutMessageResult putMessageResult = new PutMessageResult(PutMessageStatus.PUT_OK, result);
 
         // Statistics
-        storeStatsService.getSinglePutMessageTopicTimesTotal(msg.getTopic()).incrementAndGet();
-        storeStatsService.getSinglePutMessageTopicSizeTotal(topic).addAndGet(result.getWroteBytes());
+        storeStatsService.getSinglePutMessageTopicTimesTotal(msg.getTopic()).add(1);
+        storeStatsService.getSinglePutMessageTopicSizeTotal(topic).add(result.getWroteBytes());
 
         CompletableFuture<PutMessageStatus> flushResultFuture = submitFlushRequest(result, msg);
         CompletableFuture<PutMessageStatus> replicaResultFuture = submitReplicaRequest(result, msg);
@@ -952,10 +1001,6 @@ public class CommitLog {
             }
             if (replicaStatus != PutMessageStatus.PUT_OK) {
                 putMessageResult.setPutMessageStatus(replicaStatus);
-                if (replicaStatus == PutMessageStatus.FLUSH_SLAVE_TIMEOUT) {
-                    log.error("do sync transfer other node, wait return, but failed, topic: {} tags: {} client address: {}",
-                            msg.getTopic(), msg.getTags(), msg.getBornHostNameString());
-                }
             }
             return putMessageResult;
         });
@@ -976,14 +1021,26 @@ public class CommitLog {
             return CompletableFuture.completedFuture(new PutMessageResult(PutMessageStatus.MESSAGE_ILLEGAL, null));
         }
 
+        InetSocketAddress bornSocketAddress = (InetSocketAddress) messageExtBatch.getBornHost();
+        if (bornSocketAddress.getAddress() instanceof Inet6Address) {
+            messageExtBatch.setBornHostV6Flag();
+        }
+
+        InetSocketAddress storeSocketAddress = (InetSocketAddress) messageExtBatch.getStoreHost();
+        if (storeSocketAddress.getAddress() instanceof Inet6Address) {
+            messageExtBatch.setStoreHostAddressV6Flag();
+        }
+
         long elapsedTimeInLock = 0;
         MappedFile unlockMappedFile = null;
         MappedFile mappedFile = this.mappedFileQueue.getLastMappedFile();
 
         //fine-grained lock instead of the coarse-grained
-        MessageExtBatchEncoder batchEncoder = batchEncoderThreadLocal.get();
+        PutMessageThreadLocal pmThreadLocal = this.putMessageThreadLocal.get();
+        MessageExtEncoder batchEncoder = pmThreadLocal.getEncoder();
 
-        messageExtBatch.setEncodedBuff(batchEncoder.encode(messageExtBatch));
+        PutMessageContext putMessageContext = new PutMessageContext(generateKey(pmThreadLocal.getKeyBuilder(), messageExtBatch));
+        messageExtBatch.setEncodedBuff(batchEncoder.encode(messageExtBatch, putMessageContext));
 
         putMessageLock.lock();
         try {
@@ -999,11 +1056,10 @@ public class CommitLog {
             }
             if (null == mappedFile) {
                 log.error("Create mapped file1 error, topic: {} clientAddr: {}", messageExtBatch.getTopic(), messageExtBatch.getBornHostString());
-                beginTimeInLock = 0;
                 return CompletableFuture.completedFuture(new PutMessageResult(PutMessageStatus.CREATE_MAPEDFILE_FAILED, null));
             }
 
-            result = mappedFile.appendMessages(messageExtBatch, this.appendMessageCallback);
+            result = mappedFile.appendMessages(messageExtBatch, this.appendMessageCallback, putMessageContext);
             switch (result.getStatus()) {
                 case PUT_OK:
                     break;
@@ -1014,24 +1070,21 @@ public class CommitLog {
                     if (null == mappedFile) {
                         // XXX: warn and notify me
                         log.error("Create mapped file2 error, topic: {} clientAddr: {}", messageExtBatch.getTopic(), messageExtBatch.getBornHostString());
-                        beginTimeInLock = 0;
                         return CompletableFuture.completedFuture(new PutMessageResult(PutMessageStatus.CREATE_MAPEDFILE_FAILED, result));
                     }
-                    result = mappedFile.appendMessages(messageExtBatch, this.appendMessageCallback);
+                    result = mappedFile.appendMessages(messageExtBatch, this.appendMessageCallback, putMessageContext);
                     break;
                 case MESSAGE_SIZE_EXCEEDED:
                 case PROPERTIES_SIZE_EXCEEDED:
-                    beginTimeInLock = 0;
                     return CompletableFuture.completedFuture(new PutMessageResult(PutMessageStatus.MESSAGE_ILLEGAL, result));
                 case UNKNOWN_ERROR:
                 default:
-                    beginTimeInLock = 0;
                     return CompletableFuture.completedFuture(new PutMessageResult(PutMessageStatus.UNKNOWN_ERROR, result));
             }
 
             elapsedTimeInLock = this.defaultMessageStore.getSystemClock().now() - beginLockTimestamp;
-            beginTimeInLock = 0;
         } finally {
+            beginTimeInLock = 0;
             putMessageLock.unlock();
         }
 
@@ -1046,8 +1099,8 @@ public class CommitLog {
         PutMessageResult putMessageResult = new PutMessageResult(PutMessageStatus.PUT_OK, result);
 
         // Statistics
-        storeStatsService.getSinglePutMessageTopicTimesTotal(messageExtBatch.getTopic()).addAndGet(result.getMsgNum());
-        storeStatsService.getSinglePutMessageTopicSizeTotal(messageExtBatch.getTopic()).addAndGet(result.getWroteBytes());
+        storeStatsService.getSinglePutMessageTopicTimesTotal(messageExtBatch.getTopic()).add(result.getMsgNum());
+        storeStatsService.getSinglePutMessageTopicSizeTotal(messageExtBatch.getTopic()).add(result.getWroteBytes());
 
         CompletableFuture<PutMessageStatus> flushOKFuture = submitFlushRequest(result, messageExtBatch);
         CompletableFuture<PutMessageStatus> replicaOKFuture = submitReplicaRequest(result, messageExtBatch);
@@ -1057,190 +1110,186 @@ public class CommitLog {
             }
             if (replicaStatus != PutMessageStatus.PUT_OK) {
                 putMessageResult.setPutMessageStatus(replicaStatus);
-                if (replicaStatus == PutMessageStatus.FLUSH_SLAVE_TIMEOUT) {
-                    log.error("do sync transfer other node, wait return, but failed, topic: {} client address: {}",
-                            messageExtBatch.getTopic(), messageExtBatch.getBornHostNameString());
-                }
             }
             return putMessageResult;
         });
 
     }
-    /**
-     * 消息存储
-     * @param msg
-     * @return
-     */
-    public PutMessageResult putMessage(final MessageExtBrokerInner msg) {
-        // Set the storage time
-        msg.setStoreTimestamp(System.currentTimeMillis());
-        // Set the message body BODY CRC (consider the most appropriate setting
-        // on the client)
-        msg.setBodyCRC(UtilAll.crc32(msg.getBody()));
-        // Back to Results
-        AppendMessageResult result = null;
 
-        StoreStatsService storeStatsService = this.defaultMessageStore.getStoreStatsService();
-
-        String topic = msg.getTopic();
-        int queueId = msg.getQueueId();
-
-        final int tranType = MessageSysFlag.getTransactionValue(msg.getSysFlag());
-
-        /**
-         * 非事务消息或事务提交
-         */
-        if (tranType == MessageSysFlag.TRANSACTION_NOT_TYPE
-            || tranType == MessageSysFlag.TRANSACTION_COMMIT_TYPE) {
-            // Delay Delivery
-
-            /**
-             * 延迟投递   重试的消息需要先进入延迟队列   等待延迟时间到达后   再进入重试队列
-             */
-            if (msg.getDelayTimeLevel() > 0) {
-                if (msg.getDelayTimeLevel() > this.defaultMessageStore.getScheduleMessageService().getMaxDelayLevel()) {
-                    msg.setDelayTimeLevel(this.defaultMessageStore.getScheduleMessageService().getMaxDelayLevel());
-                }
-
-                /**
-                 * 发送到延迟队列
-                 */
-                topic = TopicValidator.RMQ_SYS_SCHEDULE_TOPIC;
-                /**
-                 * 对应的延迟队列的queueid  delayLevel-1
-                 */
-                queueId = ScheduleMessageService.delayLevel2QueueId(msg.getDelayTimeLevel());
-
-                // Backup real topic, queueId
-                /**
-                 * 在属性中存储真正的topic和queueuid
-                 */
-                MessageAccessor.putProperty(msg, MessageConst.PROPERTY_REAL_TOPIC, msg.getTopic());
-                MessageAccessor.putProperty(msg, MessageConst.PROPERTY_REAL_QUEUE_ID, String.valueOf(msg.getQueueId()));
-                msg.setPropertiesString(MessageDecoder.messageProperties2String(msg.getProperties()));
-
-                msg.setTopic(topic);
-                msg.setQueueId(queueId);
-            }
-        }
-
-        InetSocketAddress bornSocketAddress = (InetSocketAddress) msg.getBornHost();
-        if (bornSocketAddress.getAddress() instanceof Inet6Address) {
-            msg.setBornHostV6Flag();
-        }
-
-        InetSocketAddress storeSocketAddress = (InetSocketAddress) msg.getStoreHost();
-        if (storeSocketAddress.getAddress() instanceof Inet6Address) {
-            msg.setStoreHostAddressV6Flag();
-        }
-
-        long elapsedTimeInLock = 0;
-
-        MappedFile unlockMappedFile = null;
-
-        /**
-         * 最后一个commitlog文件
-         */
-        MappedFile mappedFile = this.mappedFileQueue.getLastMappedFile();
-
-        putMessageLock.lock(); //spin or ReentrantLock ,depending on store config
-        try {
-            long beginLockTimestamp = this.defaultMessageStore.getSystemClock().now();
-
-            /**
-             * 用于判断消息处理时间
-             * isOSPageCacheBusy
-             */
-            this.beginTimeInLock = beginLockTimestamp;
-
-            // Here settings are stored timestamp, in order to ensure an orderly
-            // global
-            msg.setStoreTimestamp(beginLockTimestamp);
-
-            /**
-             * 如果文件不存在或者已经写满  则新建
-             */
-            if (null == mappedFile || mappedFile.isFull()) {
-                mappedFile = this.mappedFileQueue.getLastMappedFile(0); // Mark: NewFile may be cause noise
-            }
-            if (null == mappedFile) {
-                log.error("create mapped file1 error, topic: " + msg.getTopic() + " clientAddr: " + msg.getBornHostString());
-                beginTimeInLock = 0;
-                return new PutMessageResult(PutMessageStatus.CREATE_MAPEDFILE_FAILED, null);
-            }
-
-            /**
-             * 消息缓存
-             * 消息缓存
-             * 消息缓存
-             */
-            result = mappedFile.appendMessage(msg, this.appendMessageCallback);
-            switch (result.getStatus()) {
-                case PUT_OK:
-                    break;
-                case END_OF_FILE:
-                    /**
-                     * 文件已经写满  则创建新commitlog  并写入
-                     */
-                    unlockMappedFile = mappedFile;
-                    // Create a new file, re-write the message
-                    mappedFile = this.mappedFileQueue.getLastMappedFile(0);
-                    if (null == mappedFile) {
-                        // XXX: warn and notify me
-                        log.error("create mapped file2 error, topic: " + msg.getTopic() + " clientAddr: " + msg.getBornHostString());
-                        beginTimeInLock = 0;
-                        return new PutMessageResult(PutMessageStatus.CREATE_MAPEDFILE_FAILED, result);
-                    }
-                    /**
-                     * 再次缓存
-                     */
-                    result = mappedFile.appendMessage(msg, this.appendMessageCallback);
-                    break;
-                case MESSAGE_SIZE_EXCEEDED:
-                case PROPERTIES_SIZE_EXCEEDED:
-                    beginTimeInLock = 0;
-                    return new PutMessageResult(PutMessageStatus.MESSAGE_ILLEGAL, result);
-                case UNKNOWN_ERROR:
-                    beginTimeInLock = 0;
-                    return new PutMessageResult(PutMessageStatus.UNKNOWN_ERROR, result);
-                default:
-                    beginTimeInLock = 0;
-                    return new PutMessageResult(PutMessageStatus.UNKNOWN_ERROR, result);
-            }
-
-            elapsedTimeInLock = this.defaultMessageStore.getSystemClock().now() - beginLockTimestamp;
-            beginTimeInLock = 0;
-        } finally {
-            putMessageLock.unlock();
-        }
-
-        if (elapsedTimeInLock > 500) {
-            log.warn("[NOTIFYME]putMessage in lock cost time(ms)={}, bodyLength={} AppendMessageResult={}", elapsedTimeInLock, msg.getBody().length, result);
-        }
-
-        if (null != unlockMappedFile && this.defaultMessageStore.getMessageStoreConfig().isWarmMapedFileEnable()) {
-            this.defaultMessageStore.unlockMappedFile(unlockMappedFile);
-        }
-
-        PutMessageResult putMessageResult = new PutMessageResult(PutMessageStatus.PUT_OK, result);
-
-        // Statistics
-        storeStatsService.getSinglePutMessageTopicTimesTotal(msg.getTopic()).incrementAndGet();
-        storeStatsService.getSinglePutMessageTopicSizeTotal(topic).addAndGet(result.getWroteBytes());
-
-        /**
-         * 刷盘
-         */
-        handleDiskFlush(result, putMessageResult, msg);
-
-        /**
-         * ha？？？？？？？？？？
-         */
-        handleHA(result, putMessageResult, msg);
-
-        return putMessageResult;
-    }
-
+//    /**
+//     * 消息存储
+//     * @param msg
+//     * @return
+//     */
+//    public PutMessageResult putMessage(final MessageExtBrokerInner msg) {
+//        // Set the storage time
+//        msg.setStoreTimestamp(System.currentTimeMillis());
+//        // Set the message body BODY CRC (consider the most appropriate setting
+//        // on the client)
+//        msg.setBodyCRC(UtilAll.crc32(msg.getBody()));
+//        // Back to Results
+//        AppendMessageResult result = null;
+//
+//        StoreStatsService storeStatsService = this.defaultMessageStore.getStoreStatsService();
+//
+//        String topic = msg.getTopic();
+//        int queueId = msg.getQueueId();
+//
+//        final int tranType = MessageSysFlag.getTransactionValue(msg.getSysFlag());
+//
+//        /**
+//         * 非事务消息或事务提交
+//         */
+//        if (tranType == MessageSysFlag.TRANSACTION_NOT_TYPE
+//                || tranType == MessageSysFlag.TRANSACTION_COMMIT_TYPE) {
+//            // Delay Delivery
+//
+//            /**
+//             * 延迟投递   重试的消息需要先进入延迟队列   等待延迟时间到达后   再进入重试队列
+//             */
+//            if (msg.getDelayTimeLevel() > 0) {
+//                if (msg.getDelayTimeLevel() > this.defaultMessageStore.getScheduleMessageService().getMaxDelayLevel()) {
+//                    msg.setDelayTimeLevel(this.defaultMessageStore.getScheduleMessageService().getMaxDelayLevel());
+//                }
+//
+//                /**
+//                 * 发送到延迟队列
+//                 */
+//                topic = TopicValidator.RMQ_SYS_SCHEDULE_TOPIC;
+//                /**
+//                 * 对应的延迟队列的queueid  delayLevel-1
+//                 */
+//                queueId = ScheduleMessageService.delayLevel2QueueId(msg.getDelayTimeLevel());
+//
+//                // Backup real topic, queueId
+//                /**
+//                 * 在属性中存储真正的topic和queueuid
+//                 */
+//                MessageAccessor.putProperty(msg, MessageConst.PROPERTY_REAL_TOPIC, msg.getTopic());
+//                MessageAccessor.putProperty(msg, MessageConst.PROPERTY_REAL_QUEUE_ID, String.valueOf(msg.getQueueId()));
+//                msg.setPropertiesString(MessageDecoder.messageProperties2String(msg.getProperties()));
+//
+//                msg.setTopic(topic);
+//                msg.setQueueId(queueId);
+//            }
+//        }
+//
+//        InetSocketAddress bornSocketAddress = (InetSocketAddress) msg.getBornHost();
+//        if (bornSocketAddress.getAddress() instanceof Inet6Address) {
+//            msg.setBornHostV6Flag();
+//        }
+//
+//        InetSocketAddress storeSocketAddress = (InetSocketAddress) msg.getStoreHost();
+//        if (storeSocketAddress.getAddress() instanceof Inet6Address) {
+//            msg.setStoreHostAddressV6Flag();
+//        }
+//
+//        long elapsedTimeInLock = 0;
+//
+//        MappedFile unlockMappedFile = null;
+//
+//        /**
+//         * 最后一个commitlog文件
+//         */
+//        MappedFile mappedFile = this.mappedFileQueue.getLastMappedFile();
+//
+//        putMessageLock.lock(); //spin or ReentrantLock ,depending on store config
+//        try {
+//            long beginLockTimestamp = this.defaultMessageStore.getSystemClock().now();
+//
+//            /**
+//             * 用于判断消息处理时间
+//             * isOSPageCacheBusy
+//             */
+//            this.beginTimeInLock = beginLockTimestamp;
+//
+//            // Here settings are stored timestamp, in order to ensure an orderly
+//            // global
+//            msg.setStoreTimestamp(beginLockTimestamp);
+//
+//            /**
+//             * 如果文件不存在或者已经写满  则新建
+//             */
+//            if (null == mappedFile || mappedFile.isFull()) {
+//                mappedFile = this.mappedFileQueue.getLastMappedFile(0); // Mark: NewFile may be cause noise
+//            }
+//            if (null == mappedFile) {
+//                log.error("create mapped file1 error, topic: " + msg.getTopic() + " clientAddr: " + msg.getBornHostString());
+//                beginTimeInLock = 0;
+//                return new PutMessageResult(PutMessageStatus.CREATE_MAPEDFILE_FAILED, null);
+//            }
+//
+//            /**
+//             * 消息缓存
+//             * 消息缓存
+//             * 消息缓存
+//             */
+//            result = mappedFile.appendMessage(msg, this.appendMessageCallback);
+//            switch (result.getStatus()) {
+//                case PUT_OK:
+//                    break;
+//                case END_OF_FILE:
+//                    /**
+//                     * 文件已经写满  则创建新commitlog  并写入
+//                     */
+//                    unlockMappedFile = mappedFile;
+//                    // Create a new file, re-write the message
+//                    mappedFile = this.mappedFileQueue.getLastMappedFile(0);
+//                    if (null == mappedFile) {
+//                        // XXX: warn and notify me
+//                        log.error("create mapped file2 error, topic: " + msg.getTopic() + " clientAddr: " + msg.getBornHostString());
+//                        beginTimeInLock = 0;
+//                        return new PutMessageResult(PutMessageStatus.CREATE_MAPEDFILE_FAILED, result);
+//                    }
+//                    /**
+//                     * 再次缓存
+//                     */
+//                    result = mappedFile.appendMessage(msg, this.appendMessageCallback);
+//                    break;
+//                case MESSAGE_SIZE_EXCEEDED:
+//                case PROPERTIES_SIZE_EXCEEDED:
+//                    beginTimeInLock = 0;
+//                    return new PutMessageResult(PutMessageStatus.MESSAGE_ILLEGAL, result);
+//                case UNKNOWN_ERROR:
+//                    beginTimeInLock = 0;
+//                    return new PutMessageResult(PutMessageStatus.UNKNOWN_ERROR, result);
+//                default:
+//                    beginTimeInLock = 0;
+//                    return new PutMessageResult(PutMessageStatus.UNKNOWN_ERROR, result);
+//            }
+//
+//            elapsedTimeInLock = this.defaultMessageStore.getSystemClock().now() - beginLockTimestamp;
+//            beginTimeInLock = 0;
+//        } finally {
+//            putMessageLock.unlock();
+//        }
+//
+//        if (elapsedTimeInLock > 500) {
+//            log.warn("[NOTIFYME]putMessage in lock cost time(ms)={}, bodyLength={} AppendMessageResult={}", elapsedTimeInLock, msg.getBody().length, result);
+//        }
+//
+//        if (null != unlockMappedFile && this.defaultMessageStore.getMessageStoreConfig().isWarmMapedFileEnable()) {
+//            this.defaultMessageStore.unlockMappedFile(unlockMappedFile);
+//        }
+//
+//        PutMessageResult putMessageResult = new PutMessageResult(PutMessageStatus.PUT_OK, result);
+//
+//        // Statistics
+//        storeStatsService.getSinglePutMessageTopicTimesTotal(msg.getTopic()).incrementAndGet();
+//        storeStatsService.getSinglePutMessageTopicSizeTotal(topic).addAndGet(result.getWroteBytes());
+//
+//        /**
+//         * 刷盘
+//         */
+//        handleDiskFlush(result, putMessageResult, msg);
+//
+//        /**
+//         * ha？？？？？？？？？？
+//         */
+//        handleHA(result, putMessageResult, msg);
+//
+//        return putMessageResult;
+//    }
     public CompletableFuture<PutMessageStatus> submitFlushRequest(AppendMessageResult result, MessageExt messageExt) {
         // Synchronization flush
         if (FlushDiskType.SYNC_FLUSH == this.defaultMessageStore.getMessageStoreConfig().getFlushDiskType()) {
@@ -1248,6 +1297,7 @@ public class CommitLog {
             if (messageExt.isWaitStoreMsgOK()) {
                 GroupCommitRequest request = new GroupCommitRequest(result.getWroteOffset() + result.getWroteBytes(),
                         this.defaultMessageStore.getMessageStoreConfig().getSyncFlushTimeout());
+                flushDiskWatcher.add(request);
                 service.putRequest(request);
                 return request.future();
             } else {
@@ -1272,7 +1322,7 @@ public class CommitLog {
             if (messageExt.isWaitStoreMsgOK()) {
                 if (service.isSlaveOK(result.getWroteBytes() + result.getWroteOffset())) {
                     GroupCommitRequest request = new GroupCommitRequest(result.getWroteOffset() + result.getWroteBytes(),
-                            this.defaultMessageStore.getMessageStoreConfig().getSyncFlushTimeout());
+                            this.defaultMessageStore.getMessageStoreConfig().getSlaveTimeout());
                     service.putRequest(request);
                     service.getWaitNotifyObject().wakeupAll();
                     return request.future();
@@ -1284,234 +1334,231 @@ public class CommitLog {
         }
         return CompletableFuture.completedFuture(PutMessageStatus.PUT_OK);
     }
+//    public void handleDiskFlush(AppendMessageResult result, PutMessageResult putMessageResult, MessageExt messageExt) {
+//        // Synchronization flush
+//        /**
+//         * 同步刷盘
+//         */
+//        if (FlushDiskType.SYNC_FLUSH == this.defaultMessageStore.getMessageStoreConfig().getFlushDiskType()) {
+//            final GroupCommitService service = (GroupCommitService) this.flushCommitLogService;
+//            /**
+//             * 消息的WAIT属性为true时    即consumer要等待同步刷盘成功
+//             * 重试队列和延迟队列的WAIT属性为false
+//             */
+//            if (messageExt.isWaitStoreMsgOK()) {
+//                /**
+//                 * result.getWroteOffset() + result.getWroteBytes()  下一个msg的commitlogoffset
+//                 */
+//                GroupCommitRequest request = new GroupCommitRequest(result.getWroteOffset() + result.getWroteBytes());
+//                /**
+//                 * requestsWrite注入新消息
+//                 */
+//                service.putRequest(request);
+//                CompletableFuture<PutMessageStatus> flushOkFuture = request.future();
+//                PutMessageStatus flushStatus = null;
+//                try {
+//                    flushStatus = flushOkFuture.get(this.defaultMessageStore.getMessageStoreConfig().getSyncFlushTimeout(),
+//                            TimeUnit.MILLISECONDS);
+//                } catch (InterruptedException | ExecutionException | TimeoutException e) {
+//                    //flushOK=false;
+//                }
+//                if (flushStatus != PutMessageStatus.PUT_OK) {
+//                    log.error("do groupcommit, wait for flush failed, topic: " + messageExt.getTopic() + " tags: " + messageExt.getTags()
+//                            + " client address: " + messageExt.getBornHostString());
+//                    putMessageResult.setPutMessageStatus(PutMessageStatus.FLUSH_DISK_TIMEOUT);
+//                }
+//            } else {
+//                /**
+//                 * broker设置成同步刷盘  但consumer不愿意等待刷盘成功
+//                 * 于是这里变为了异步刷盘
+//                 */
+//                service.wakeup();
+//            }
+//        }
+//        // Asynchronous flush
+//        /**
+//         * 异步刷盘
+//         */
+//        else {
+//            if (!this.defaultMessageStore.getMessageStoreConfig().isTransientStorePoolEnable()) {
+//                flushCommitLogService.wakeup();
+//            } else {
+//                commitLogService.wakeup();
+//            }
+//        }
+//    }
+//
+//    public void handleHA(AppendMessageResult result, PutMessageResult putMessageResult, MessageExt messageExt) {
+//        if (BrokerRole.SYNC_MASTER == this.defaultMessageStore.getMessageStoreConfig().getBrokerRole()) {
+//            HAService service = this.defaultMessageStore.getHaService();
+//            if (messageExt.isWaitStoreMsgOK()) {
+//                // Determine whether to wait
+//                if (service.isSlaveOK(result.getWroteOffset() + result.getWroteBytes())) {
+//                    GroupCommitRequest request = new GroupCommitRequest(result.getWroteOffset() + result.getWroteBytes());
+//                    service.putRequest(request);
+//                    service.getWaitNotifyObject().wakeupAll();
+//                    PutMessageStatus replicaStatus = null;
+//                    try {
+//                        replicaStatus = request.future().get(this.defaultMessageStore.getMessageStoreConfig().getSyncFlushTimeout(),
+//                                TimeUnit.MILLISECONDS);
+//                    } catch (InterruptedException | ExecutionException | TimeoutException e) {
+//                    }
+//                    if (replicaStatus != PutMessageStatus.PUT_OK) {
+//                        log.error("do sync transfer other node, wait return, but failed, topic: " + messageExt.getTopic() + " tags: "
+//                                + messageExt.getTags() + " client address: " + messageExt.getBornHostNameString());
+//                        putMessageResult.setPutMessageStatus(PutMessageStatus.FLUSH_SLAVE_TIMEOUT);
+//                    }
+//                }
+//                // Slave problem
+//                else {
+//                    // Tell the producer, slave not available
+//                    putMessageResult.setPutMessageStatus(PutMessageStatus.SLAVE_NOT_AVAILABLE);
+//                }
+//            }
+//        }
+//
+//    }
 
-
-    public void handleDiskFlush(AppendMessageResult result, PutMessageResult putMessageResult, MessageExt messageExt) {
-        // Synchronization flush
-        /**
-         * 同步刷盘
-         */
-        if (FlushDiskType.SYNC_FLUSH == this.defaultMessageStore.getMessageStoreConfig().getFlushDiskType()) {
-            final GroupCommitService service = (GroupCommitService) this.flushCommitLogService;
-            /**
-             * 消息的WAIT属性为true时    即consumer要等待同步刷盘成功
-             * 重试队列和延迟队列的WAIT属性为false
-             */
-            if (messageExt.isWaitStoreMsgOK()) {
-                /**
-                 * result.getWroteOffset() + result.getWroteBytes()  下一个msg的commitlogoffset
-                 */
-                GroupCommitRequest request = new GroupCommitRequest(result.getWroteOffset() + result.getWroteBytes());
-                /**
-                 * requestsWrite注入新消息
-                 */
-                service.putRequest(request);
-                CompletableFuture<PutMessageStatus> flushOkFuture = request.future();
-                PutMessageStatus flushStatus = null;
-                try {
-                    flushStatus = flushOkFuture.get(this.defaultMessageStore.getMessageStoreConfig().getSyncFlushTimeout(),
-                            TimeUnit.MILLISECONDS);
-                } catch (InterruptedException | ExecutionException | TimeoutException e) {
-                    //flushOK=false;
-                }
-                if (flushStatus != PutMessageStatus.PUT_OK) {
-                    log.error("do groupcommit, wait for flush failed, topic: " + messageExt.getTopic() + " tags: " + messageExt.getTags()
-                        + " client address: " + messageExt.getBornHostString());
-                    putMessageResult.setPutMessageStatus(PutMessageStatus.FLUSH_DISK_TIMEOUT);
-                }
-            } else {
-                /**
-                 * broker设置成同步刷盘  但consumer不愿意等待刷盘成功
-                 * 于是这里变为了异步刷盘
-                 */
-                service.wakeup();
-            }
-        }
-        // Asynchronous flush
-        /**
-         * 异步刷盘
-         */
-        else {
-            if (!this.defaultMessageStore.getMessageStoreConfig().isTransientStorePoolEnable()) {
-                flushCommitLogService.wakeup();
-            } else {
-                commitLogService.wakeup();
-            }
-        }
-    }
-
-    public void handleHA(AppendMessageResult result, PutMessageResult putMessageResult, MessageExt messageExt) {
-        if (BrokerRole.SYNC_MASTER == this.defaultMessageStore.getMessageStoreConfig().getBrokerRole()) {
-            HAService service = this.defaultMessageStore.getHaService();
-            if (messageExt.isWaitStoreMsgOK()) {
-                // Determine whether to wait
-                if (service.isSlaveOK(result.getWroteOffset() + result.getWroteBytes())) {
-                    GroupCommitRequest request = new GroupCommitRequest(result.getWroteOffset() + result.getWroteBytes());
-                    service.putRequest(request);
-                    service.getWaitNotifyObject().wakeupAll();
-                    PutMessageStatus replicaStatus = null;
-                    try {
-                        replicaStatus = request.future().get(this.defaultMessageStore.getMessageStoreConfig().getSyncFlushTimeout(),
-                                TimeUnit.MILLISECONDS);
-                    } catch (InterruptedException | ExecutionException | TimeoutException e) {
-                    }
-                    if (replicaStatus != PutMessageStatus.PUT_OK) {
-                        log.error("do sync transfer other node, wait return, but failed, topic: " + messageExt.getTopic() + " tags: "
-                            + messageExt.getTags() + " client address: " + messageExt.getBornHostNameString());
-                        putMessageResult.setPutMessageStatus(PutMessageStatus.FLUSH_SLAVE_TIMEOUT);
-                    }
-                }
-                // Slave problem
-                else {
-                    // Tell the producer, slave not available
-                    putMessageResult.setPutMessageStatus(PutMessageStatus.SLAVE_NOT_AVAILABLE);
-                }
-            }
-        }
-
-    }
-
-    /**
-     * 批量消息存储
-     * @param messageExtBatch
-     * @return
-     */
-    public PutMessageResult putMessages(final MessageExtBatch messageExtBatch) {
-        messageExtBatch.setStoreTimestamp(System.currentTimeMillis());
-        AppendMessageResult result;
-
-        StoreStatsService storeStatsService = this.defaultMessageStore.getStoreStatsService();
-
-        final int tranType = MessageSysFlag.getTransactionValue(messageExtBatch.getSysFlag());
-
-        /**
-         * 只支持一般消息类型
-         */
-        if (tranType != MessageSysFlag.TRANSACTION_NOT_TYPE) {
-            return new PutMessageResult(PutMessageStatus.MESSAGE_ILLEGAL, null);
-        }
-
-        /**
-         * 不支持延迟消息
-         */
-        if (messageExtBatch.getDelayTimeLevel() > 0) {
-            return new PutMessageResult(PutMessageStatus.MESSAGE_ILLEGAL, null);
-        }
-
-        InetSocketAddress bornSocketAddress = (InetSocketAddress) messageExtBatch.getBornHost();
-        if (bornSocketAddress.getAddress() instanceof Inet6Address) {
-            messageExtBatch.setBornHostV6Flag();
-        }
-
-        InetSocketAddress storeSocketAddress = (InetSocketAddress) messageExtBatch.getStoreHost();
-        if (storeSocketAddress.getAddress() instanceof Inet6Address) {
-            messageExtBatch.setStoreHostAddressV6Flag();
-        }
-
-        long elapsedTimeInLock = 0;
-        MappedFile unlockMappedFile = null;
-        MappedFile mappedFile = this.mappedFileQueue.getLastMappedFile();
-
-        //fine-grained lock instead of the coarse-grained
-        MessageExtBatchEncoder batchEncoder = batchEncoderThreadLocal.get();
-
-        /**
-         * 解析messageExtBatch
-         * 解析messageExtBatch
-         * 解析messageExtBatch
-         */
-        messageExtBatch.setEncodedBuff(batchEncoder.encode(messageExtBatch));
-
-        putMessageLock.lock();
-        try {
-            long beginLockTimestamp = this.defaultMessageStore.getSystemClock().now();
-            this.beginTimeInLock = beginLockTimestamp;
-
-            // Here settings are stored timestamp, in order to ensure an orderly
-            // global
-            messageExtBatch.setStoreTimestamp(beginLockTimestamp);
-
-            if (null == mappedFile || mappedFile.isFull()) {
-                mappedFile = this.mappedFileQueue.getLastMappedFile(0); // Mark: NewFile may be cause noise
-            }
-            if (null == mappedFile) {
-                log.error("Create mapped file1 error, topic: {} clientAddr: {}", messageExtBatch.getTopic(), messageExtBatch.getBornHostString());
-                beginTimeInLock = 0;
-                return new PutMessageResult(PutMessageStatus.CREATE_MAPEDFILE_FAILED, null);
-            }
-
-            /**
-             * 批量消息存储
-             * 批量消息存储
-             * 批量消息存储
-             */
-            result = mappedFile.appendMessages(messageExtBatch, this.appendMessageCallback);
-            switch (result.getStatus()) {
-                case PUT_OK:
-                    break;
-                case END_OF_FILE:
-                    /**
-                     * 文件已经写满  则创建新commitlog  并写入
-                     */
-                    unlockMappedFile = mappedFile;
-                    // Create a new file, re-write the message
-                    mappedFile = this.mappedFileQueue.getLastMappedFile(0);
-                    if (null == mappedFile) {
-                        // XXX: warn and notify me
-                        log.error("Create mapped file2 error, topic: {} clientAddr: {}", messageExtBatch.getTopic(), messageExtBatch.getBornHostString());
-                        beginTimeInLock = 0;
-                        return new PutMessageResult(PutMessageStatus.CREATE_MAPEDFILE_FAILED, result);
-                    }
-                    /**
-                     * 再次写入剩余消息
-                     */
-                    result = mappedFile.appendMessages(messageExtBatch, this.appendMessageCallback);
-                    break;
-                case MESSAGE_SIZE_EXCEEDED:
-                case PROPERTIES_SIZE_EXCEEDED:
-                    beginTimeInLock = 0;
-                    return new PutMessageResult(PutMessageStatus.MESSAGE_ILLEGAL, result);
-                case UNKNOWN_ERROR:
-                    beginTimeInLock = 0;
-                    return new PutMessageResult(PutMessageStatus.UNKNOWN_ERROR, result);
-                default:
-                    beginTimeInLock = 0;
-                    return new PutMessageResult(PutMessageStatus.UNKNOWN_ERROR, result);
-            }
-
-            elapsedTimeInLock = this.defaultMessageStore.getSystemClock().now() - beginLockTimestamp;
-            beginTimeInLock = 0;
-        } finally {
-            putMessageLock.unlock();
-        }
-
-        if (elapsedTimeInLock > 500) {
-            log.warn("[NOTIFYME]putMessages in lock cost time(ms)={}, bodyLength={} AppendMessageResult={}", elapsedTimeInLock, messageExtBatch.getBody().length, result);
-        }
-
-        if (null != unlockMappedFile && this.defaultMessageStore.getMessageStoreConfig().isWarmMapedFileEnable()) {
-            this.defaultMessageStore.unlockMappedFile(unlockMappedFile);
-        }
-
-        PutMessageResult putMessageResult = new PutMessageResult(PutMessageStatus.PUT_OK, result);
-
-        // Statistics
-        storeStatsService.getSinglePutMessageTopicTimesTotal(messageExtBatch.getTopic()).addAndGet(result.getMsgNum());
-        storeStatsService.getSinglePutMessageTopicSizeTotal(messageExtBatch.getTopic()).addAndGet(result.getWroteBytes());
-
-        /**
-         * 刷盘
-         */
-        handleDiskFlush(result, putMessageResult, messageExtBatch);
-
-        /**
-         * ha
-         */
-        handleHA(result, putMessageResult, messageExtBatch);
-
-        return putMessageResult;
-    }
-
+//    /**
+//     * 批量消息存储
+//     * @param messageExtBatch
+//     * @return
+//     */
+//    public PutMessageResult putMessages(final MessageExtBatch messageExtBatch) {
+//        messageExtBatch.setStoreTimestamp(System.currentTimeMillis());
+//        AppendMessageResult result;
+//
+//        StoreStatsService storeStatsService = this.defaultMessageStore.getStoreStatsService();
+//
+//        final int tranType = MessageSysFlag.getTransactionValue(messageExtBatch.getSysFlag());
+//
+//        /**
+//         * 只支持一般消息类型
+//         */
+//        if (tranType != MessageSysFlag.TRANSACTION_NOT_TYPE) {
+//            return new PutMessageResult(PutMessageStatus.MESSAGE_ILLEGAL, null);
+//        }
+//
+//        /**
+//         * 不支持延迟消息
+//         */
+//        if (messageExtBatch.getDelayTimeLevel() > 0) {
+//            return new PutMessageResult(PutMessageStatus.MESSAGE_ILLEGAL, null);
+//        }
+//
+//        InetSocketAddress bornSocketAddress = (InetSocketAddress) messageExtBatch.getBornHost();
+//        if (bornSocketAddress.getAddress() instanceof Inet6Address) {
+//            messageExtBatch.setBornHostV6Flag();
+//        }
+//
+//        InetSocketAddress storeSocketAddress = (InetSocketAddress) messageExtBatch.getStoreHost();
+//        if (storeSocketAddress.getAddress() instanceof Inet6Address) {
+//            messageExtBatch.setStoreHostAddressV6Flag();
+//        }
+//
+//        long elapsedTimeInLock = 0;
+//        MappedFile unlockMappedFile = null;
+//        MappedFile mappedFile = this.mappedFileQueue.getLastMappedFile();
+//
+//        //fine-grained lock instead of the coarse-grained
+//        MessageExtBatchEncoder batchEncoder = batchEncoderThreadLocal.get();
+//
+//        /**
+//         * 解析messageExtBatch
+//         * 解析messageExtBatch
+//         * 解析messageExtBatch
+//         */
+//        messageExtBatch.setEncodedBuff(batchEncoder.encode(messageExtBatch));
+//
+//        putMessageLock.lock();
+//        try {
+//            long beginLockTimestamp = this.defaultMessageStore.getSystemClock().now();
+//            this.beginTimeInLock = beginLockTimestamp;
+//
+//            // Here settings are stored timestamp, in order to ensure an orderly
+//            // global
+//            messageExtBatch.setStoreTimestamp(beginLockTimestamp);
+//
+//            if (null == mappedFile || mappedFile.isFull()) {
+//                mappedFile = this.mappedFileQueue.getLastMappedFile(0); // Mark: NewFile may be cause noise
+//            }
+//            if (null == mappedFile) {
+//                log.error("Create mapped file1 error, topic: {} clientAddr: {}", messageExtBatch.getTopic(), messageExtBatch.getBornHostString());
+//                beginTimeInLock = 0;
+//                return new PutMessageResult(PutMessageStatus.CREATE_MAPEDFILE_FAILED, null);
+//            }
+//
+//            /**
+//             * 批量消息存储
+//             * 批量消息存储
+//             * 批量消息存储
+//             */
+//            result = mappedFile.appendMessages(messageExtBatch, this.appendMessageCallback);
+//            switch (result.getStatus()) {
+//                case PUT_OK:
+//                    break;
+//                case END_OF_FILE:
+//                    /**
+//                     * 文件已经写满  则创建新commitlog  并写入
+//                     */
+//                    unlockMappedFile = mappedFile;
+//                    // Create a new file, re-write the message
+//                    mappedFile = this.mappedFileQueue.getLastMappedFile(0);
+//                    if (null == mappedFile) {
+//                        // XXX: warn and notify me
+//                        log.error("Create mapped file2 error, topic: {} clientAddr: {}", messageExtBatch.getTopic(), messageExtBatch.getBornHostString());
+//                        beginTimeInLock = 0;
+//                        return new PutMessageResult(PutMessageStatus.CREATE_MAPEDFILE_FAILED, result);
+//                    }
+//                    /**
+//                     * 再次写入剩余消息
+//                     */
+//                    result = mappedFile.appendMessages(messageExtBatch, this.appendMessageCallback);
+//                    break;
+//                case MESSAGE_SIZE_EXCEEDED:
+//                case PROPERTIES_SIZE_EXCEEDED:
+//                    beginTimeInLock = 0;
+//                    return new PutMessageResult(PutMessageStatus.MESSAGE_ILLEGAL, result);
+//                case UNKNOWN_ERROR:
+//                    beginTimeInLock = 0;
+//                    return new PutMessageResult(PutMessageStatus.UNKNOWN_ERROR, result);
+//                default:
+//                    beginTimeInLock = 0;
+//                    return new PutMessageResult(PutMessageStatus.UNKNOWN_ERROR, result);
+//            }
+//
+//            elapsedTimeInLock = this.defaultMessageStore.getSystemClock().now() - beginLockTimestamp;
+//            beginTimeInLock = 0;
+//        } finally {
+//            putMessageLock.unlock();
+//        }
+//
+//        if (elapsedTimeInLock > 500) {
+//            log.warn("[NOTIFYME]putMessages in lock cost time(ms)={}, bodyLength={} AppendMessageResult={}", elapsedTimeInLock, messageExtBatch.getBody().length, result);
+//        }
+//
+//        if (null != unlockMappedFile && this.defaultMessageStore.getMessageStoreConfig().isWarmMapedFileEnable()) {
+//            this.defaultMessageStore.unlockMappedFile(unlockMappedFile);
+//        }
+//
+//        PutMessageResult putMessageResult = new PutMessageResult(PutMessageStatus.PUT_OK, result);
+//
+//        // Statistics
+//        storeStatsService.getSinglePutMessageTopicTimesTotal(messageExtBatch.getTopic()).addAndGet(result.getMsgNum());
+//        storeStatsService.getSinglePutMessageTopicSizeTotal(messageExtBatch.getTopic()).addAndGet(result.getWroteBytes());
+//
+//        /**
+//         * 刷盘
+//         */
+//        handleDiskFlush(result, putMessageResult, messageExtBatch);
+//
+//        /**
+//         * ha
+//         */
+//        handleHA(result, putMessageResult, messageExtBatch);
+//
+//        return putMessageResult;
+//    }
     /**
      * According to receive certain message or offset storage time if an error occurs, it returns -1
      */
@@ -1606,7 +1653,7 @@ public class CommitLog {
         this.mappedFileQueue.destroy();
     }
 
-    public boolean appendData(long startOffset, byte[] data) {
+    public boolean appendData(long startOffset, byte[] data, int dataStart, int dataLength) {
         putMessageLock.lock();
         try {
             MappedFile mappedFile = this.mappedFileQueue.getLastMappedFile(startOffset);
@@ -1615,7 +1662,7 @@ public class CommitLog {
                 return false;
             }
 
-            return mappedFile.appendMessage(data);
+            return mappedFile.appendMessage(data, dataStart, dataLength);
         } finally {
             putMessageLock.unlock();
         }
@@ -1629,6 +1676,7 @@ public class CommitLog {
         String key = topic + "-" + queueId;
         synchronized (this) {
             this.topicQueueTable.remove(key);
+            this.lmqTopicQueueTable.remove(key);
         }
 
         log.info("removeQueueFromTopicQueueTable OK Topic: {} QueueId: {}", topic, queueId);
@@ -1650,6 +1698,10 @@ public class CommitLog {
         }
 
         return diff;
+    }
+
+    public Map<String, Long> getLmqTopicQueueTable() {
+        return this.lmqTopicQueueTable;
     }
 
     abstract class FlushCommitLogService extends ServiceThread {
@@ -1866,18 +1918,16 @@ public class CommitLog {
     public static class GroupCommitRequest {
         private final long nextOffset;
         private CompletableFuture<PutMessageStatus> flushOKFuture = new CompletableFuture<>();
-        private final long startTimestamp = System.currentTimeMillis();
-        private long timeoutMillis = Long.MAX_VALUE;
+        private final long deadLine;
 
         public GroupCommitRequest(long nextOffset, long timeoutMillis) {
             this.nextOffset = nextOffset;
-            this.timeoutMillis = timeoutMillis;
+            this.deadLine = System.nanoTime() + (timeoutMillis * 1_000_000);
         }
 
-        public GroupCommitRequest(long nextOffset) {
-            this.nextOffset = nextOffset;
+        public long getDeadLine() {
+            return deadLine;
         }
-
 
         public long getNextOffset() {
             return nextOffset;
@@ -1949,16 +1999,20 @@ public class CommitLog {
 //
 //    这是存在happens-before关系的
     class GroupCommitService extends FlushCommitLogService {
-        private volatile List<GroupCommitRequest> requestsWrite = new ArrayList<GroupCommitRequest>();
-        private volatile List<GroupCommitRequest> requestsRead = new ArrayList<GroupCommitRequest>();
+        private volatile LinkedList<GroupCommitRequest> requestsWrite = new LinkedList<GroupCommitRequest>();
+        private volatile LinkedList<GroupCommitRequest> requestsRead = new LinkedList<GroupCommitRequest>();
+        private final PutMessageSpinLock lock = new PutMessageSpinLock();
 
         /**
          * requestsWrite注入新消息
          * @param request
          */
         public synchronized void putRequest(final GroupCommitRequest request) {
-            synchronized (this.requestsWrite) {
+            lock.lock();
+            try {
                 this.requestsWrite.add(request);
+            } finally {
+                lock.unlock();
             }
             /**
              * 如果通知已经传达了  但工作线程没有处理结束  新的请求就不用通知了
@@ -1971,47 +2025,50 @@ public class CommitLog {
          * 数据转换   将requestsRead和requestsWrite的值互换
          */
         private void swapRequests() {
-            List<GroupCommitRequest> tmp = this.requestsWrite;
-            this.requestsWrite = this.requestsRead;
-            this.requestsRead = tmp;
+            lock.lock();
+            try {
+                LinkedList<GroupCommitRequest> tmp = this.requestsWrite;
+                this.requestsWrite = this.requestsRead;
+                this.requestsRead = tmp;
+            } finally {
+                lock.unlock();
+            }
         }
 
         /**
          * 同步刷盘
          */
         private void doCommit() {
-            synchronized (this.requestsRead) {
-                if (!this.requestsRead.isEmpty()) {
-                    for (GroupCommitRequest req : this.requestsRead) {
-                        // There may be a message in the next file, so a maximum of
-                        // two times the flush
-                        boolean flushOK = CommitLog.this.mappedFileQueue.getFlushedWhere() >= req.getNextOffset();
+            if (!this.requestsRead.isEmpty()) {
+                for (GroupCommitRequest req : this.requestsRead) {
+                    // There may be a message in the next file, so a maximum of
+                    // two times the flush
+                    boolean flushOK = CommitLog.this.mappedFileQueue.getFlushedWhere() >= req.getNextOffset();
+                    /**
+                     * 每次只能刷盘一个mappedFile
+                     * 如果有一个新mappedFile产生   需要再刷一次
+                     */
+                    for (int i = 0; i < 2 && !flushOK; i++) {
                         /**
-                         * 每次只能刷盘一个mappedFile
-                         * 如果有一个新mappedFile产生   需要再刷一次
+                         * 刷盘
                          */
-                        for (int i = 0; i < 2 && !flushOK; i++) {
-                            /**
-                             * 刷盘
-                             */
-                            CommitLog.this.mappedFileQueue.flush(0);
-                            flushOK = CommitLog.this.mappedFileQueue.getFlushedWhere() >= req.getNextOffset();
-                        }
-
-                        req.wakeupCustomer(flushOK ? PutMessageStatus.PUT_OK : PutMessageStatus.FLUSH_DISK_TIMEOUT);
+                        CommitLog.this.mappedFileQueue.flush(0);
+                        flushOK = CommitLog.this.mappedFileQueue.getFlushedWhere() >= req.getNextOffset();
                     }
 
-                    long storeTimestamp = CommitLog.this.mappedFileQueue.getStoreTimestamp();
-                    if (storeTimestamp > 0) {
-                        CommitLog.this.defaultMessageStore.getStoreCheckpoint().setPhysicMsgTimestamp(storeTimestamp);
-                    }
-
-                    this.requestsRead.clear();
-                } else {
-                    // Because of individual messages is set to not sync flush, it
-                    // will come to this process
-                    CommitLog.this.mappedFileQueue.flush(0);
+                    req.wakeupCustomer(flushOK ? PutMessageStatus.PUT_OK : PutMessageStatus.FLUSH_DISK_TIMEOUT);
                 }
+
+                long storeTimestamp = CommitLog.this.mappedFileQueue.getStoreTimestamp();
+                if (storeTimestamp > 0) {
+                    CommitLog.this.defaultMessageStore.getStoreCheckpoint().setPhysicMsgTimestamp(storeTimestamp);
+                }
+
+                this.requestsRead = new LinkedList<>();
+            } else {
+                // Because of individual messages is set to not sync flush, it
+                // will come to this process
+                CommitLog.this.mappedFileQueue.flush(0);
             }
         }
 
@@ -2035,7 +2092,7 @@ public class CommitLog {
             try {
                 Thread.sleep(10);
             } catch (InterruptedException e) {
-                CommitLog.log.warn("GroupCommitService Exception, ", e);
+                CommitLog.log.warn(this.getServiceName() + " Exception, ", e);
             }
 
             synchronized (this) {
@@ -2072,22 +2129,13 @@ public class CommitLog {
         private final ByteBuffer msgStoreItemMemory;
         // The maximum length of the message
         private final int maxMessageSize;
-        // Build Message Key
-        private final StringBuilder keyBuilder = new StringBuilder();
-
-        private final StringBuilder msgIdBuilder = new StringBuilder();
 
         DefaultAppendMessageCallback(final int size) {
             this.msgIdMemory = ByteBuffer.allocate(4 + 4 + 8);
             this.msgIdV6Memory = ByteBuffer.allocate(16 + 4 + 8);
-            this.msgStoreItemMemory = ByteBuffer.allocate(size + END_FILE_MIN_BLANK_LENGTH);
+            this.msgStoreItemMemory = ByteBuffer.allocate(END_FILE_MIN_BLANK_LENGTH);
             this.maxMessageSize = size;
         }
-
-        public ByteBuffer getMsgStoreItemMemory() {
-            return msgStoreItemMemory;
-        }
-
         /**
          * 单个消息存储
          * @param fileFromOffset  文件起始offset
@@ -2097,7 +2145,7 @@ public class CommitLog {
          * @return
          */
         public AppendMessageResult doAppend(final long fileFromOffset, final ByteBuffer byteBuffer, final int maxBlank,
-            final MessageExtBrokerInner msgInner) {
+            final MessageExtBrokerInner msgInner, PutMessageContext putMessageContext) {
             // STORETIMESTAMP + STOREHOSTADDRESS + OFFSET <br>
 
             // PHY OFFSET
@@ -2106,31 +2154,18 @@ public class CommitLog {
              */
             long wroteOffset = fileFromOffset + byteBuffer.position();
 
-            int sysflag = msgInner.getSysFlag();
-
-            int bornHostLength = (sysflag & MessageSysFlag.BORNHOST_V6_FLAG) == 0 ? 4 + 4 : 16 + 4;
-            int storeHostLength = (sysflag & MessageSysFlag.STOREHOSTADDRESS_V6_FLAG) == 0 ? 4 + 4 : 16 + 4;
-            ByteBuffer bornHostHolder = ByteBuffer.allocate(bornHostLength);
-            ByteBuffer storeHostHolder = ByteBuffer.allocate(storeHostLength);
-
-            /**
-             * 重置hostHolder
-             */
-            this.resetByteBuffer(storeHostHolder, storeHostLength);
-            String msgId;
-            if ((sysflag & MessageSysFlag.STOREHOSTADDRESS_V6_FLAG) == 0) {
-                msgId = MessageDecoder.createMessageId(this.msgIdMemory, msgInner.getStoreHostBytes(storeHostHolder), wroteOffset);
-            } else {
-                msgId = MessageDecoder.createMessageId(this.msgIdV6Memory, msgInner.getStoreHostBytes(storeHostHolder), wroteOffset);
-            }
+            Supplier<String> msgIdSupplier = () -> {
+                int sysflag = msgInner.getSysFlag();
+                int msgIdLen = (sysflag & MessageSysFlag.STOREHOSTADDRESS_V6_FLAG) == 0 ? 4 + 4 + 8 : 16 + 4 + 8;
+                ByteBuffer msgIdBuffer = ByteBuffer.allocate(msgIdLen);
+                MessageExt.socketAddress2ByteBuffer(msgInner.getStoreHost(), msgIdBuffer);
+                msgIdBuffer.clear();//because socketAddress2ByteBuffer flip the buffer
+                msgIdBuffer.putLong(msgIdLen - 8, wroteOffset);
+                return UtilAll.bytes2string(msgIdBuffer.array());
+            };
 
             // Record ConsumeQueue information
-            keyBuilder.setLength(0);
-            keyBuilder.append(msgInner.getTopic());
-            keyBuilder.append('-');
-            keyBuilder.append(msgInner.getQueueId());
-            String key = keyBuilder.toString();
-
+            String key = putMessageContext.getTopicQueueTableKey();
             /**
              * 计算queueOffset  为空则初始化
              */
@@ -2140,10 +2175,15 @@ public class CommitLog {
                 CommitLog.this.topicQueueTable.put(key, queueOffset);
             }
 
+            boolean multiDispatchWrapResult = CommitLog.this.multiDispatch.wrapMultiDispatch(msgInner);
+            if (!multiDispatchWrapResult) {
+                return new AppendMessageResult(AppendMessageStatus.UNKNOWN_ERROR);
+            }
+
+            // Transaction messages that require special handling
             /**
              * 是否为事务消息
              */
-            // Transaction messages that require special handling
             final int tranType = MessageSysFlag.getTransactionValue(msgInner.getSysFlag());
             switch (tranType) {
                 // Prepared and Rollback message is not consumed, will not enter the
@@ -2158,45 +2198,8 @@ public class CommitLog {
                     break;
             }
 
-            /**
-             * Serialize message
-             * 计算msg中Properties
-             */
-            final byte[] propertiesData =
-                msgInner.getPropertiesString() == null ? null : msgInner.getPropertiesString().getBytes(MessageDecoder.CHARSET_UTF8);
-
-            final int propertiesLength = propertiesData == null ? 0 : propertiesData.length;
-
-            if (propertiesLength > Short.MAX_VALUE) {
-                log.warn("putMessage message properties length too long. length={}", propertiesData.length);
-                return new AppendMessageResult(AppendMessageStatus.PROPERTIES_SIZE_EXCEEDED);
-            }
-
-            /**
-             * 计算topic长度
-             */
-            final byte[] topicData = msgInner.getTopic().getBytes(MessageDecoder.CHARSET_UTF8);
-            final int topicLength = topicData.length;
-
-            /**
-             * 计算body长度
-             */
-            final int bodyLength = msgInner.getBody() == null ? 0 : msgInner.getBody().length;
-
-            /**
-             * 计算即将存入commitlog的消息大小
-             */
-            final int msgLen = calMsgLength(msgInner.getSysFlag(), bodyLength, topicLength, propertiesLength);
-
-            // Exceeds the maximum message
-            /**
-             * 消息大小不能大于4m
-             */
-            if (msgLen > this.maxMessageSize) {
-                CommitLog.log.warn("message size exceeded, msg total size: " + msgLen + ", msg body size: " + bodyLength
-                    + ", maxMessageSize: " + this.maxMessageSize);
-                return new AppendMessageResult(AppendMessageStatus.MESSAGE_SIZE_EXCEEDED);
-            }
+            ByteBuffer preEncodeBuffer = msgInner.getEncodedBuff();
+            final int msgLen = preEncodeBuffer.getInt(0);
 
             // Determines whether there is sufficient free space
             /**
@@ -2205,7 +2208,7 @@ public class CommitLog {
              * 消息大小+8字节的长度大于文件剩余长度   则写入8字节的数据表示文件已经写到末尾并返回END_OF_FILE
              */
             if ((msgLen + END_FILE_MIN_BLANK_LENGTH) > maxBlank) {
-                this.resetByteBuffer(this.msgStoreItemMemory, maxBlank);
+                this.msgStoreItemMemory.clear();
                 // 1 TOTALSIZE
                 this.msgStoreItemMemory.putInt(maxBlank);
                 // 2 MAGICCODE
@@ -2213,62 +2216,28 @@ public class CommitLog {
                 // 3 The remaining space may be any value
                 // Here the length of the specially set maxBlank
                 final long beginTimeMills = CommitLog.this.defaultMessageStore.now();
-
                 /**
                  * 将msgStoreItemMemory写入byteBuffer
                  */
-                byteBuffer.put(this.msgStoreItemMemory.array(), 0, maxBlank);
-                return new AppendMessageResult(AppendMessageStatus.END_OF_FILE, wroteOffset, maxBlank, msgId, msgInner.getStoreTimestamp(),
-                    queueOffset, CommitLog.this.defaultMessageStore.now() - beginTimeMills);
+                byteBuffer.put(this.msgStoreItemMemory.array(), 0, 8);
+                return new AppendMessageResult(AppendMessageStatus.END_OF_FILE, wroteOffset,
+                        maxBlank, /* only wrote 8 bytes, but declare wrote maxBlank for compute write position */
+                        msgIdSupplier, msgInner.getStoreTimestamp(),
+                        queueOffset, CommitLog.this.defaultMessageStore.now() - beginTimeMills);
             }
 
-
-            /**
-             * 处理正确的数据
-             */
-            // Initialization of storage space
-            this.resetByteBuffer(msgStoreItemMemory, msgLen);
-            // 1 TOTALSIZE
-            this.msgStoreItemMemory.putInt(msgLen);
-            // 2 MAGICCODE
-            this.msgStoreItemMemory.putInt(CommitLog.MESSAGE_MAGIC_CODE);
-            // 3 BODYCRC
-            this.msgStoreItemMemory.putInt(msgInner.getBodyCRC());
-            // 4 QUEUEID
-            this.msgStoreItemMemory.putInt(msgInner.getQueueId());
-            // 5 FLAG
-            this.msgStoreItemMemory.putInt(msgInner.getFlag());
+            int pos = 4 + 4 + 4 + 4 + 4;
             // 6 QUEUEOFFSET
-            this.msgStoreItemMemory.putLong(queueOffset);
+            preEncodeBuffer.putLong(pos, queueOffset);
+            pos += 8;
             // 7 PHYSICALOFFSET
-            this.msgStoreItemMemory.putLong(fileFromOffset + byteBuffer.position());
-            // 8 SYSFLAG
-            this.msgStoreItemMemory.putInt(msgInner.getSysFlag());
-            // 9 BORNTIMESTAMP
-            this.msgStoreItemMemory.putLong(msgInner.getBornTimestamp());
-            // 10 BORNHOST
-            this.resetByteBuffer(bornHostHolder, bornHostLength);
-            this.msgStoreItemMemory.put(msgInner.getBornHostBytes(bornHostHolder));
-            // 11 STORETIMESTAMP
-            this.msgStoreItemMemory.putLong(msgInner.getStoreTimestamp());
-            // 12 STOREHOSTADDRESS
-            this.resetByteBuffer(storeHostHolder, storeHostLength);
-            this.msgStoreItemMemory.put(msgInner.getStoreHostBytes(storeHostHolder));
-            // 13 RECONSUMETIMES
-            this.msgStoreItemMemory.putInt(msgInner.getReconsumeTimes());
-            // 14 Prepared Transaction Offset
-            this.msgStoreItemMemory.putLong(msgInner.getPreparedTransactionOffset());
-            // 15 BODY
-            this.msgStoreItemMemory.putInt(bodyLength);
-            if (bodyLength > 0)
-                this.msgStoreItemMemory.put(msgInner.getBody());
-            // 16 TOPIC
-            this.msgStoreItemMemory.put((byte) topicLength);
-            this.msgStoreItemMemory.put(topicData);
-            // 17 PROPERTIES
-            this.msgStoreItemMemory.putShort((short) propertiesLength);
-            if (propertiesLength > 0)
-                this.msgStoreItemMemory.put(propertiesData);
+            preEncodeBuffer.putLong(pos, fileFromOffset + byteBuffer.position());
+            int ipLen = (msgInner.getSysFlag() & MessageSysFlag.BORNHOST_V6_FLAG) == 0 ? 4 + 4 : 16 + 4;
+            // 8 SYSFLAG, 9 BORNTIMESTAMP, 10 BORNHOST, 11 STORETIMESTAMP
+            pos += 8 + 4 + 8 + ipLen;
+            // refresh store time stamp in lock
+            preEncodeBuffer.putLong(pos, msgInner.getStoreTimestamp());
+
 
             final long beginTimeMills = CommitLog.this.defaultMessageStore.now();
 
@@ -2276,9 +2245,9 @@ public class CommitLog {
              * 将msgStoreItemMemory写入byteBuffer
              */
             // Write messages to the queue buffer
-            byteBuffer.put(this.msgStoreItemMemory.array(), 0, msgLen);
-
-            AppendMessageResult result = new AppendMessageResult(AppendMessageStatus.PUT_OK, wroteOffset, msgLen, msgId,
+            byteBuffer.put(preEncodeBuffer);
+            msgInner.setEncodedBuff(null);
+            AppendMessageResult result = new AppendMessageResult(AppendMessageStatus.PUT_OK, wroteOffset, msgLen, msgIdSupplier,
                 msgInner.getStoreTimestamp(), queueOffset, CommitLog.this.defaultMessageStore.now() - beginTimeMills);
 
             switch (tranType) {
@@ -2293,6 +2262,7 @@ public class CommitLog {
                      * queueOffset+1   即下一个消息的逻辑存储位置
                      */
                     CommitLog.this.topicQueueTable.put(key, ++queueOffset);
+                    CommitLog.this.multiDispatch.updateMultiQueueOffset(msgInner);
                     break;
                 default:
                     break;
@@ -2309,7 +2279,7 @@ public class CommitLog {
          * @return
          */
         public AppendMessageResult doAppend(final long fileFromOffset, final ByteBuffer byteBuffer, final int maxBlank,
-            final MessageExtBatch messageExtBatch) {
+            final MessageExtBatch messageExtBatch, PutMessageContext putMessageContext) {
             byteBuffer.mark();
             //physical offset
             /**
@@ -2317,12 +2287,7 @@ public class CommitLog {
              */
             long wroteOffset = fileFromOffset + byteBuffer.position();
             // Record ConsumeQueue information
-            keyBuilder.setLength(0);
-            keyBuilder.append(messageExtBatch.getTopic());
-            keyBuilder.append('-');
-            keyBuilder.append(messageExtBatch.getQueueId());
-            String key = keyBuilder.toString();
-
+            String key = putMessageContext.getTopicQueueTableKey();
             /**
              * 获取queueOffset
              */
@@ -2334,7 +2299,7 @@ public class CommitLog {
             long beginQueueOffset = queueOffset;
             int totalMsgLen = 0;
             int msgNum = 0;
-            msgIdBuilder.setLength(0);
+
             final long beginTimeMills = CommitLog.this.defaultMessageStore.now();
 
             /**
@@ -2343,16 +2308,30 @@ public class CommitLog {
             ByteBuffer messagesByteBuff = messageExtBatch.getEncodedBuff();
 
             int sysFlag = messageExtBatch.getSysFlag();
+            int bornHostLength = (sysFlag & MessageSysFlag.BORNHOST_V6_FLAG) == 0 ? 4 + 4 : 16 + 4;
             int storeHostLength = (sysFlag & MessageSysFlag.STOREHOSTADDRESS_V6_FLAG) == 0 ? 4 + 4 : 16 + 4;
-            ByteBuffer storeHostHolder = ByteBuffer.allocate(storeHostLength);
+            Supplier<String> msgIdSupplier = () -> {
+                int msgIdLen = storeHostLength + 8;
+                int batchCount = putMessageContext.getBatchSize();
+                long[] phyPosArray = putMessageContext.getPhyPos();
+                ByteBuffer msgIdBuffer = ByteBuffer.allocate(msgIdLen);
+                MessageExt.socketAddress2ByteBuffer(messageExtBatch.getStoreHost(), msgIdBuffer);
+                msgIdBuffer.clear();//because socketAddress2ByteBuffer flip the buffer
 
-            this.resetByteBuffer(storeHostHolder, storeHostLength);
-            ByteBuffer storeHostBytes = messageExtBatch.getStoreHostBytes(storeHostHolder);
+                StringBuilder buffer = new StringBuilder(batchCount * msgIdLen * 2 + batchCount - 1);
+                for (int i = 0; i < phyPosArray.length; i++) {
+                    msgIdBuffer.putLong(msgIdLen - 8, phyPosArray[i]);
+                    String msgId = UtilAll.bytes2string(msgIdBuffer.array());
+                    if (i != 0) {
+                        buffer.append(',');
+                    }
+                    buffer.append(msgId);
+                }
+                return buffer.toString();
+            };
+
             messagesByteBuff.mark();
-
-            /**
-             * 轮询消息体
-             */
+            int index = 0;
             while (messagesByteBuff.hasRemaining()) {
                 // 1 TOTALSIZE
                 final int msgPos = messagesByteBuff.position();
@@ -2375,7 +2354,7 @@ public class CommitLog {
                  * 消息大小+8字节的长度大于文件剩余长度   则写入8字节的数据表示文件已经写到末尾并返回END_OF_FILE
                  */
                 if ((totalMsgLen + END_FILE_MIN_BLANK_LENGTH) > maxBlank) {
-                    this.resetByteBuffer(this.msgStoreItemMemory, 8);
+                    this.msgStoreItemMemory.clear();
                     // 1 TOTALSIZE
                     this.msgStoreItemMemory.putInt(maxBlank);
                     // 2 MAGICCODE
@@ -2386,39 +2365,29 @@ public class CommitLog {
                     // Here the length of the specially set maxBlank
                     byteBuffer.reset(); //ignore the previous appended messages
                     byteBuffer.put(this.msgStoreItemMemory.array(), 0, 8);
-                    return new AppendMessageResult(AppendMessageStatus.END_OF_FILE, wroteOffset, maxBlank, msgIdBuilder.toString(), messageExtBatch.getStoreTimestamp(),
+                    return new AppendMessageResult(AppendMessageStatus.END_OF_FILE, wroteOffset, maxBlank, msgIdSupplier, messageExtBatch.getStoreTimestamp(),
                         beginQueueOffset, CommitLog.this.defaultMessageStore.now() - beginTimeMills);
                 }
                 //move to add queue offset and commitlog offset
+                int pos = msgPos + 20;
                 /**
                  * 后移
                  */
-                messagesByteBuff.position(msgPos + 20);
+                messagesByteBuff.putLong(pos, queueOffset);
+                pos += 8;
                 /**
                  * 写入消息对应的queueOffset
                  */
-                messagesByteBuff.putLong(queueOffset);
+                messagesByteBuff.putLong(pos, wroteOffset + totalMsgLen - msgLen);
+                // 8 SYSFLAG, 9 BORNTIMESTAMP, 10 BORNHOST, 11 STORETIMESTAMP
+                pos += 8 + 4 + 8 + bornHostLength;
+                // refresh store time stamp in lock
                 /**
                  * 写入消息对应的commitlogOffset
                  */
-                messagesByteBuff.putLong(wroteOffset + totalMsgLen - msgLen);
+                messagesByteBuff.putLong(pos, messageExtBatch.getStoreTimestamp());
 
-                storeHostBytes.rewind();
-                /**
-                 * 根据addr和commitlogoffset生成msgId
-                 */
-                String msgId;
-                if ((sysFlag & MessageSysFlag.STOREHOSTADDRESS_V6_FLAG) == 0) {
-                    msgId = MessageDecoder.createMessageId(this.msgIdMemory, storeHostBytes, wroteOffset + totalMsgLen - msgLen);
-                } else {
-                    msgId = MessageDecoder.createMessageId(this.msgIdV6Memory, storeHostBytes, wroteOffset + totalMsgLen - msgLen);
-                }
-
-                if (msgIdBuilder.length() > 0) {
-                    msgIdBuilder.append(',').append(msgId);
-                } else {
-                    msgIdBuilder.append(msgId);
-                }
+                putMessageContext.getPhyPos()[index++] = wroteOffset + totalMsgLen - msgLen;
                 queueOffset++;
                 msgNum++;
                 messagesByteBuff.position(msgPos + msgLen);
@@ -2432,7 +2401,7 @@ public class CommitLog {
              */
             byteBuffer.put(messagesByteBuff);
             messageExtBatch.setEncodedBuff(null);
-            AppendMessageResult result = new AppendMessageResult(AppendMessageStatus.PUT_OK, wroteOffset, totalMsgLen, msgIdBuilder.toString(),
+            AppendMessageResult result = new AppendMessageResult(AppendMessageStatus.PUT_OK, wroteOffset, totalMsgLen, msgIdSupplier,
                 messageExtBatch.getStoreTimestamp(), beginQueueOffset, CommitLog.this.defaultMessageStore.now() - beginTimeMills);
             result.setMsgNum(msgNum);
             /**
@@ -2450,26 +2419,104 @@ public class CommitLog {
 
     }
 
-    public static class MessageExtBatchEncoder {
+    public static class MessageExtEncoder {
         // Store the message content
-        private final ByteBuffer msgBatchMemory;
+        private final ByteBuffer encoderBuffer;
         // The maximum length of the message
         private final int maxMessageSize;
 
-        MessageExtBatchEncoder(final int size) {
-            this.msgBatchMemory = ByteBuffer.allocateDirect(size);
+        MessageExtEncoder(final int size) {
+            this.encoderBuffer = ByteBuffer.allocateDirect(size);
             this.maxMessageSize = size;
         }
 
-        /**
-         * 解析messageExtBatch   并将producer提交的批量消息保存到msgBatchMemory
-         *
-         * producer端批量消息的编码   详见MessageDecoder#encodeMessage（）
-         * @param messageExtBatch
-         * @return
-         */
-        public ByteBuffer encode(final MessageExtBatch messageExtBatch) {
-            msgBatchMemory.clear(); //not thread-safe
+        private void socketAddress2ByteBuffer(final SocketAddress socketAddress, final ByteBuffer byteBuffer) {
+            InetSocketAddress inetSocketAddress = (InetSocketAddress) socketAddress;
+            InetAddress address = inetSocketAddress.getAddress();
+            if (address instanceof Inet4Address) {
+                byteBuffer.put(inetSocketAddress.getAddress().getAddress(), 0, 4);
+            } else {
+                byteBuffer.put(inetSocketAddress.getAddress().getAddress(), 0, 16);
+            }
+            byteBuffer.putInt(inetSocketAddress.getPort());
+        }
+
+        protected PutMessageResult encode(MessageExtBrokerInner msgInner) {
+            /**
+             * Serialize message
+             */
+            final byte[] propertiesData =
+                    msgInner.getPropertiesString() == null ? null : msgInner.getPropertiesString().getBytes(MessageDecoder.CHARSET_UTF8);
+
+            final int propertiesLength = propertiesData == null ? 0 : propertiesData.length;
+
+            if (propertiesLength > Short.MAX_VALUE) {
+                log.warn("putMessage message properties length too long. length={}", propertiesData.length);
+                return new PutMessageResult(PutMessageStatus.PROPERTIES_SIZE_EXCEEDED, null);
+            }
+
+            final byte[] topicData = msgInner.getTopic().getBytes(MessageDecoder.CHARSET_UTF8);
+            final int topicLength = topicData.length;
+
+            final int bodyLength = msgInner.getBody() == null ? 0 : msgInner.getBody().length;
+
+            final int msgLen = calMsgLength(msgInner.getSysFlag(), bodyLength, topicLength, propertiesLength);
+
+            // Exceeds the maximum message
+            if (msgLen > this.maxMessageSize) {
+                CommitLog.log.warn("message size exceeded, msg total size: " + msgLen + ", msg body size: " + bodyLength
+                        + ", maxMessageSize: " + this.maxMessageSize);
+                return new PutMessageResult(PutMessageStatus.MESSAGE_ILLEGAL, null);
+            }
+
+            // Initialization of storage space
+            this.resetByteBuffer(encoderBuffer, msgLen);
+            // 1 TOTALSIZE
+            this.encoderBuffer.putInt(msgLen);
+            // 2 MAGICCODE
+            this.encoderBuffer.putInt(CommitLog.MESSAGE_MAGIC_CODE);
+            // 3 BODYCRC
+            this.encoderBuffer.putInt(msgInner.getBodyCRC());
+            // 4 QUEUEID
+            this.encoderBuffer.putInt(msgInner.getQueueId());
+            // 5 FLAG
+            this.encoderBuffer.putInt(msgInner.getFlag());
+            // 6 QUEUEOFFSET, need update later
+            this.encoderBuffer.putLong(0);
+            // 7 PHYSICALOFFSET, need update later
+            this.encoderBuffer.putLong(0);
+            // 8 SYSFLAG
+            this.encoderBuffer.putInt(msgInner.getSysFlag());
+            // 9 BORNTIMESTAMP
+            this.encoderBuffer.putLong(msgInner.getBornTimestamp());
+            // 10 BORNHOST
+            socketAddress2ByteBuffer(msgInner.getBornHost() ,this.encoderBuffer);
+            // 11 STORETIMESTAMP
+            this.encoderBuffer.putLong(msgInner.getStoreTimestamp());
+            // 12 STOREHOSTADDRESS
+            socketAddress2ByteBuffer(msgInner.getStoreHost() ,this.encoderBuffer);
+            // 13 RECONSUMETIMES
+            this.encoderBuffer.putInt(msgInner.getReconsumeTimes());
+            // 14 Prepared Transaction Offset
+            this.encoderBuffer.putLong(msgInner.getPreparedTransactionOffset());
+            // 15 BODY
+            this.encoderBuffer.putInt(bodyLength);
+            if (bodyLength > 0)
+                this.encoderBuffer.put(msgInner.getBody());
+            // 16 TOPIC
+            this.encoderBuffer.put((byte) topicLength);
+            this.encoderBuffer.put(topicData);
+            // 17 PROPERTIES
+            this.encoderBuffer.putShort((short) propertiesLength);
+            if (propertiesLength > 0)
+                this.encoderBuffer.put(propertiesData);
+
+            encoderBuffer.flip();
+            return null;
+        }
+
+        protected ByteBuffer encode(final MessageExtBatch messageExtBatch, PutMessageContext putMessageContext) {
+            encoderBuffer.clear(); //not thread-safe
             int totalMsgLen = 0;
             /**
              * 将批量消息内容转换为ByteBuffer
@@ -2485,9 +2532,16 @@ public class CommitLog {
             // properties from MessageExtBatch
             String batchPropStr = MessageDecoder.messageProperties2String(messageExtBatch.getProperties());
             final byte[] batchPropData = batchPropStr.getBytes(MessageDecoder.CHARSET_UTF8);
-            final short batchPropLen = (short) batchPropData.length;
+            int batchPropDataLen = batchPropData.length;
+            if (batchPropDataLen > Short.MAX_VALUE) {
+                CommitLog.log.warn("Properties size of messageExtBatch exceeded, properties size: {}, maxSize: {}.", batchPropDataLen, Short.MAX_VALUE);
+                throw new RuntimeException("Properties size of messageExtBatch exceeded!");
+            }
+            final short batchPropLen = (short) batchPropDataLen;
 
+            int batchSize = 0;
             while (messagesByteBuff.hasRemaining()) {
+                batchSize++;
                 /**
                  * 依照消息在producer端编码的格式解析处消息（body、properties、flag等）
                  */
@@ -2514,16 +2568,19 @@ public class CommitLog {
                  * 此处不获取properties的值  而且根据长度略过  进入一个内容
                  */
                 messagesByteBuff.position(propertiesPos + propertiesLen);
+                boolean needAppendLastPropertySeparator = propertiesLen > 0 && batchPropLen > 0
+                            && messagesByteBuff.get(messagesByteBuff.position() - 1) != MessageDecoder.PROPERTY_SEPARATOR;
 
                 final byte[] topicData = messageExtBatch.getTopic().getBytes(MessageDecoder.CHARSET_UTF8);
 
                 final int topicLength = topicData.length;
 
+                int totalPropLen = needAppendLastPropertySeparator ? propertiesLen + batchPropLen + 1
+                                                                     : propertiesLen + batchPropLen;
                 /**
                  * 按commitlog存储格式  计算单条消息总长度
                  */
-                final int msgLen = calMsgLength(messageExtBatch.getSysFlag(), bodyLen, topicLength,
-                        propertiesLen + batchPropLen);
+                final int msgLen = calMsgLength(messageExtBatch.getSysFlag(), bodyLen, topicLength, totalPropLen);
 
                 // Exceeds the maximum message
                 if (msgLen > this.maxMessageSize) {
@@ -2548,60 +2605,64 @@ public class CommitLog {
                  * 按commitlog存储格式  存储当前消息
                  */
                 // 1 TOTALSIZE
-                this.msgBatchMemory.putInt(msgLen);
+                this.encoderBuffer.putInt(msgLen);
                 // 2 MAGICCODE
-                this.msgBatchMemory.putInt(CommitLog.MESSAGE_MAGIC_CODE);
+                this.encoderBuffer.putInt(CommitLog.MESSAGE_MAGIC_CODE);
                 // 3 BODYCRC
-                this.msgBatchMemory.putInt(bodyCrc);
+                this.encoderBuffer.putInt(bodyCrc);
                 // 4 QUEUEID
-                this.msgBatchMemory.putInt(messageExtBatch.getQueueId());
+                this.encoderBuffer.putInt(messageExtBatch.getQueueId());
                 // 5 FLAG
-                this.msgBatchMemory.putInt(flag);
+                this.encoderBuffer.putInt(flag);
                 // 6 QUEUEOFFSET
                 /**
                  * 此处赋值0   待实际存储时   添加对应的数据
                  */
-                this.msgBatchMemory.putLong(0);
+                this.encoderBuffer.putLong(0);
                 // 7 PHYSICALOFFSET
                 /**
                  * 此处赋值0   待实际存储时   添加对应的数据
                  */
-                this.msgBatchMemory.putLong(0);
+                this.encoderBuffer.putLong(0);
                 // 8 SYSFLAG
-                this.msgBatchMemory.putInt(messageExtBatch.getSysFlag());
+                this.encoderBuffer.putInt(messageExtBatch.getSysFlag());
                 // 9 BORNTIMESTAMP
-                this.msgBatchMemory.putLong(messageExtBatch.getBornTimestamp());
+                this.encoderBuffer.putLong(messageExtBatch.getBornTimestamp());
                 // 10 BORNHOST
                 this.resetByteBuffer(bornHostHolder, bornHostLength);
-                this.msgBatchMemory.put(messageExtBatch.getBornHostBytes(bornHostHolder));
+                this.encoderBuffer.put(messageExtBatch.getBornHostBytes(bornHostHolder));
                 // 11 STORETIMESTAMP
-                this.msgBatchMemory.putLong(messageExtBatch.getStoreTimestamp());
+                this.encoderBuffer.putLong(messageExtBatch.getStoreTimestamp());
                 // 12 STOREHOSTADDRESS
                 this.resetByteBuffer(storeHostHolder, storeHostLength);
-                this.msgBatchMemory.put(messageExtBatch.getStoreHostBytes(storeHostHolder));
+                this.encoderBuffer.put(messageExtBatch.getStoreHostBytes(storeHostHolder));
                 // 13 RECONSUMETIMES
-                this.msgBatchMemory.putInt(messageExtBatch.getReconsumeTimes());
+                this.encoderBuffer.putInt(messageExtBatch.getReconsumeTimes());
                 // 14 Prepared Transaction Offset, batch does not support transaction
-                this.msgBatchMemory.putLong(0);
+                this.encoderBuffer.putLong(0);
                 // 15 BODY
-                this.msgBatchMemory.putInt(bodyLen);
+                this.encoderBuffer.putInt(bodyLen);
                 if (bodyLen > 0)
-                    this.msgBatchMemory.put(messagesByteBuff.array(), bodyPos, bodyLen);
+                    this.encoderBuffer.put(messagesByteBuff.array(), bodyPos, bodyLen);
                 // 16 TOPIC
-                this.msgBatchMemory.put((byte) topicLength);
-                this.msgBatchMemory.put(topicData);
+                this.encoderBuffer.put((byte) topicLength);
+                this.encoderBuffer.put(topicData);
                 // 17 PROPERTIES
-                this.msgBatchMemory.putShort((short) (propertiesLen + batchPropLen));
+                this.encoderBuffer.putShort((short) totalPropLen);
                 if (propertiesLen > 0) {
-                    this.msgBatchMemory.put(messagesByteBuff.array(), propertiesPos, propertiesLen);
+                    this.encoderBuffer.put(messagesByteBuff.array(), propertiesPos, propertiesLen);
                 }
                 if (batchPropLen > 0) {
-                    this.msgBatchMemory.put(batchPropData, 0, batchPropLen);
+                    if (needAppendLastPropertySeparator) {
+                        this.encoderBuffer.put((byte) MessageDecoder.PROPERTY_SEPARATOR);
+                    }
+                    this.encoderBuffer.put(batchPropData, 0, batchPropLen);
                 }
             }
-            //while循环结束
-            msgBatchMemory.flip();
-            return msgBatchMemory;
+            putMessageContext.setBatchSize(batchSize);
+            putMessageContext.setPhyPos(new long[batchSize]);
+            encoderBuffer.flip();
+            return encoderBuffer;
         }
 
         private void resetByteBuffer(final ByteBuffer byteBuffer, final int limit) {
@@ -2609,5 +2670,55 @@ public class CommitLog {
             byteBuffer.limit(limit);
         }
 
+        public ByteBuffer getEncoderBuffer() {
+            return encoderBuffer;
+        }
+    }
+
+    static class PutMessageThreadLocal {
+        private MessageExtEncoder encoder;
+        private StringBuilder keyBuilder;
+        PutMessageThreadLocal(int size) {
+            encoder = new MessageExtEncoder(size);
+            keyBuilder = new StringBuilder();
+        }
+
+        public MessageExtEncoder getEncoder() {
+            return encoder;
+        }
+
+        public StringBuilder getKeyBuilder() {
+            return keyBuilder;
+        }
+    }
+
+    static class PutMessageContext {
+        private String topicQueueTableKey;
+        private long[] phyPos;
+        private int batchSize;
+
+        public PutMessageContext(String topicQueueTableKey) {
+            this.topicQueueTableKey = topicQueueTableKey;
+        }
+
+        public String getTopicQueueTableKey() {
+            return topicQueueTableKey;
+        }
+
+        public long[] getPhyPos() {
+            return phyPos;
+        }
+
+        public void setPhyPos(long[] phyPos) {
+            this.phyPos = phyPos;
+        }
+
+        public int getBatchSize() {
+            return batchSize;
+        }
+
+        public void setBatchSize(int batchSize) {
+            this.batchSize = batchSize;
+        }
     }
 }

@@ -17,9 +17,11 @@
 package org.apache.rocketmq.client.trace;
 
 import org.apache.rocketmq.client.producer.LocalTransactionState;
+import org.apache.rocketmq.common.message.MessageConst;
 import org.apache.rocketmq.common.message.MessageType;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 
 /**
@@ -195,7 +197,6 @@ public class TraceDataEncoder {
                         .append(ctx.getContextCode()).append(TraceConstants.CONTENT_SPLITOR)
                         .append(ctx.getTimeStamp()).append(TraceConstants.CONTENT_SPLITOR)
                         .append(ctx.getGroupName()).append(TraceConstants.FIELD_SPLITOR);
-
                 }
             }
             break;
@@ -225,10 +226,11 @@ public class TraceDataEncoder {
              */
             transferBean.getTransKey().add(bean.getMsgId());
             if (bean.getKeys() != null && bean.getKeys().length() > 0) {
+                String[] keys = bean.getKeys().split(MessageConst.KEY_SEPARATOR);
                 /**
                  * 存储消息的keys
                  */
-                transferBean.getTransKey().add(bean.getKeys());
+                transferBean.getTransKey().addAll(Arrays.asList(keys));
             }
         }
         return transferBean;

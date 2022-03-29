@@ -178,7 +178,7 @@ public class NamesrvStartup {
         opt.setRequired(false);
         options.addOption(opt);
 
-        opt = new Option("p", "printConfigItem", false, "Print all config item");
+        opt = new Option("p", "printConfigItem", false, "Print all config items");
         opt.setRequired(false);
         options.addOption(opt);
 

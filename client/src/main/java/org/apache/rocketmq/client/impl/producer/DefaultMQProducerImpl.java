@@ -24,8 +24,6 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Random;
 import java.util.Set;
-import java.util.Timer;
-import java.util.TimerTask;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
@@ -58,7 +56,7 @@ import org.apache.rocketmq.client.producer.LocalTransactionExecuter;
 import org.apache.rocketmq.client.producer.LocalTransactionState;
 import org.apache.rocketmq.client.producer.MessageQueueSelector;
 import org.apache.rocketmq.client.producer.RequestCallback;
-import org.apache.rocketmq.client.producer.RequestFutureTable;
+import org.apache.rocketmq.client.producer.RequestFutureHolder;
 import org.apache.rocketmq.client.producer.RequestResponseFuture;
 import org.apache.rocketmq.client.producer.SendCallback;
 import org.apache.rocketmq.client.producer.SendResult;
@@ -82,7 +80,6 @@ import org.apache.rocketmq.common.message.MessageId;
 import org.apache.rocketmq.common.message.MessageQueue;
 import org.apache.rocketmq.common.message.MessageType;
 import org.apache.rocketmq.common.protocol.NamespaceUtil;
-import org.apache.rocketmq.common.protocol.ResponseCode;
 import org.apache.rocketmq.common.protocol.header.CheckTransactionStateRequestHeader;
 import org.apache.rocketmq.common.protocol.header.EndTransactionRequestHeader;
 import org.apache.rocketmq.common.protocol.header.SendMessageRequestHeader;
@@ -107,7 +104,6 @@ public class DefaultMQProducerImpl implements MQProducerInner {
     private final RPCHook rpcHook;
     private final BlockingQueue<Runnable> asyncSenderThreadPoolQueue;
     private final ExecutorService defaultAsyncSenderExecutor;
-    private final Timer timer = new Timer("RequestHouseKeepingService", true);
     protected BlockingQueue<Runnable> checkRequestQueue;
     protected ExecutorService checkExecutor;
     private ServiceState serviceState = ServiceState.CREATE_JUST;
@@ -258,16 +254,8 @@ public class DefaultMQProducerImpl implements MQProducerInner {
 
         this.mQClientFactory.sendHeartbeatToAllBrokerWithLock();
 
-        this.timer.scheduleAtFixedRate(new TimerTask() {
-            @Override
-            public void run() {
-                try {
-                    RequestFutureTable.scanExpiredRequest();
-                } catch (Throwable e) {
-                    log.error("scan RequestFutureTable exception", e);
-                }
-            }
-        }, 1000 * 3, 1000);
+        RequestFutureHolder.getInstance().startScheduledTask(this);
+
     }
 
     private void checkConfig() throws MQClientException {
@@ -297,7 +285,7 @@ public class DefaultMQProducerImpl implements MQProducerInner {
                 if (shutdownFactory) {
                     this.mQClientFactory.shutdown();
                 }
-                this.timer.cancel();
+                RequestFutureHolder.getInstance().shutdown(this);
                 log.info("the producer [{}] shutdown OK", this.defaultMQProducer.getProducerGroup());
                 this.serviceState = ServiceState.SHUTDOWN_ALREADY;
                 break;
@@ -326,9 +314,7 @@ public class DefaultMQProducerImpl implements MQProducerInner {
     }
 
     /**
-     * This method will be removed in the version 5.0.0 and <code>getCheckListener</code> is recommended.
-     *
-     * @return
+     * @deprecated This method will be removed in the version 5.0.0 and {@link DefaultMQProducerImpl#getCheckListener} is recommended.
      */
     @Override
     @Deprecated
@@ -555,12 +541,13 @@ public class DefaultMQProducerImpl implements MQProducerInner {
     }
 
     /**
+     * @deprecated
      * It will be removed at 4.4.0 cause for exception handling and the wrong Semantics of timeout. A new one will be
      * provided in next version
      *
      * @param msg
      * @param sendCallback
-     * @param timeout the <code>sendCallback</code> will be invoked at most time
+     * @param timeout      the <code>sendCallback</code> will be invoked at most time
      * @throws RejectedExecutionException
      */
     @Deprecated
@@ -734,20 +721,14 @@ public class DefaultMQProducerImpl implements MQProducerInner {
                         log.warn(String.format("sendKernelImpl exception, resend at once, InvokeID: %s, RT: %sms, Broker: %s", invokeID, endTimestamp - beginTimestampPrev, mq), e);
                         log.warn(msg.toString());
                         exception = e;
-                        switch (e.getResponseCode()) {
-                            case ResponseCode.TOPIC_NOT_EXIST:
-                            case ResponseCode.SERVICE_NOT_AVAILABLE:
-                            case ResponseCode.SYSTEM_ERROR:
-                            case ResponseCode.NO_PERMISSION:
-                            case ResponseCode.NO_BUYER_ID:
-                            case ResponseCode.NOT_IN_CURRENT_UNIT:
-                                continue;
-                            default:
-                                if (sendResult != null) {
-                                    return sendResult;
-                                }
+                        if (this.defaultMQProducer.getRetryResponseCodes().contains(e.getResponseCode())) {
+                            continue;
+                        } else {
+                            if (sendResult != null) {
+                                return sendResult;
+                            }
 
-                                throw e;
+                            throw e;
                         }
                     } catch (InterruptedException e) {
                         endTimestamp = System.currentTimeMillis();
@@ -888,7 +869,7 @@ public class DefaultMQProducerImpl implements MQProducerInner {
                  * 若消息包含事务  则添加事务标志
                  */
                 final String tranMsg = msg.getProperty(MessageConst.PROPERTY_TRANSACTION_PREPARED);
-                if (tranMsg != null && Boolean.parseBoolean(tranMsg)) {
+                if (Boolean.parseBoolean(tranMsg)) {
                     sysFlag |= MessageSysFlag.TRANSACTION_PREPARED_TYPE;
                 }
 
@@ -1193,6 +1174,7 @@ public class DefaultMQProducerImpl implements MQProducerInner {
             executeEndTransactionHook(context);
         }
     }
+
     /**
      * DEFAULT ONEWAY -------------------------------------------------------
      */
@@ -1239,13 +1221,14 @@ public class DefaultMQProducerImpl implements MQProducerInner {
     }
 
     /**
+     * @deprecated
      * It will be removed at 4.4.0 cause for exception handling and the wrong Semantics of timeout. A new one will be
      * provided in next version
      *
      * @param msg
      * @param mq
      * @param sendCallback
-     * @param timeout the <code>sendCallback</code> will be invoked at most time
+     * @param timeout      the <code>sendCallback</code> will be invoked at most time
      * @throws MQClientException
      * @throws RemotingException
      * @throws InterruptedException
@@ -1405,7 +1388,7 @@ public class DefaultMQProducerImpl implements MQProducerInner {
      * @param selector
      * @param arg
      * @param sendCallback
-     * @param timeout the <code>sendCallback</code> will be invoked at most time
+     * @param timeout      the <code>sendCallback</code> will be invoked at most time
      * @throws MQClientException
      * @throws RemotingException
      * @throws InterruptedException
@@ -1430,7 +1413,7 @@ public class DefaultMQProducerImpl implements MQProducerInner {
                                 sendSelectImpl(msg, selector, arg, CommunicationMode.ASYNC, sendCallback,
                                     timeout - costTime);
                             } catch (MQBrokerException e) {
-                                throw new MQClientException("unknownn exception", e);
+                                throw new MQClientException("unknown exception", e);
                             }
                         } catch (Exception e) {
                             sendCallback.onException(e);
@@ -1442,7 +1425,7 @@ public class DefaultMQProducerImpl implements MQProducerInner {
 
             });
         } catch (RejectedExecutionException e) {
-            throw new MQClientException("exector rejected ", e);
+            throw new MQClientException("executor rejected ", e);
         }
     }
 
@@ -1715,7 +1698,7 @@ public class DefaultMQProducerImpl implements MQProducerInner {
              * 记录correlationId对应得RequestResponseFuture
              * 请求关联响应
              */
-            RequestFutureTable.getRequestFutureTable().put(correlationId, requestResponseFuture);
+            RequestFutureHolder.getInstance().getRequestFutureTable().put(correlationId, requestResponseFuture);
 
             long cost = System.currentTimeMillis() - beginTimestamp;
             /**
@@ -1740,7 +1723,7 @@ public class DefaultMQProducerImpl implements MQProducerInner {
              */
             return waitResponse(msg, timeout, requestResponseFuture, cost);
         } finally {
-            RequestFutureTable.getRequestFutureTable().remove(correlationId);
+            RequestFutureHolder.getInstance().getRequestFutureTable().remove(correlationId);
         }
     }
 
@@ -1768,7 +1751,7 @@ public class DefaultMQProducerImpl implements MQProducerInner {
          * 记录correlationId对应得RequestResponseFuture
          * 请求关联响应
          */
-        RequestFutureTable.getRequestFutureTable().put(correlationId, requestResponseFuture);
+        RequestFutureHolder.getInstance().getRequestFutureTable().put(correlationId, requestResponseFuture);
 
         long cost = System.currentTimeMillis() - beginTimestamp;
         /**
@@ -1797,7 +1780,7 @@ public class DefaultMQProducerImpl implements MQProducerInner {
 
         try {
             final RequestResponseFuture requestResponseFuture = new RequestResponseFuture(correlationId, timeout, null);
-            RequestFutureTable.getRequestFutureTable().put(correlationId, requestResponseFuture);
+            RequestFutureHolder.getInstance().getRequestFutureTable().put(correlationId, requestResponseFuture);
 
             long cost = System.currentTimeMillis() - beginTimestamp;
             this.sendSelectImpl(msg, selector, arg, CommunicationMode.ASYNC, new SendCallback() {
@@ -1816,7 +1799,7 @@ public class DefaultMQProducerImpl implements MQProducerInner {
 
             return waitResponse(msg, timeout, requestResponseFuture, cost);
         } finally {
-            RequestFutureTable.getRequestFutureTable().remove(correlationId);
+            RequestFutureHolder.getInstance().getRequestFutureTable().remove(correlationId);
         }
     }
 
@@ -1828,7 +1811,7 @@ public class DefaultMQProducerImpl implements MQProducerInner {
         final String correlationId = msg.getProperty(MessageConst.PROPERTY_CORRELATION_ID);
 
         final RequestResponseFuture requestResponseFuture = new RequestResponseFuture(correlationId, timeout, requestCallback);
-        RequestFutureTable.getRequestFutureTable().put(correlationId, requestResponseFuture);
+        RequestFutureHolder.getInstance().getRequestFutureTable().put(correlationId, requestResponseFuture);
 
         long cost = System.currentTimeMillis() - beginTimestamp;
         this.sendSelectImpl(msg, selector, arg, CommunicationMode.ASYNC, new SendCallback() {
@@ -1854,7 +1837,7 @@ public class DefaultMQProducerImpl implements MQProducerInner {
 
         try {
             final RequestResponseFuture requestResponseFuture = new RequestResponseFuture(correlationId, timeout, null);
-            RequestFutureTable.getRequestFutureTable().put(correlationId, requestResponseFuture);
+            RequestFutureHolder.getInstance().getRequestFutureTable().put(correlationId, requestResponseFuture);
 
             long cost = System.currentTimeMillis() - beginTimestamp;
             this.sendKernelImpl(msg, mq, CommunicationMode.ASYNC, new SendCallback() {
@@ -1873,23 +1856,12 @@ public class DefaultMQProducerImpl implements MQProducerInner {
 
             return waitResponse(msg, timeout, requestResponseFuture, cost);
         } finally {
-            RequestFutureTable.getRequestFutureTable().remove(correlationId);
+            RequestFutureHolder.getInstance().getRequestFutureTable().remove(correlationId);
         }
     }
 
-    /**
-     * 等待通知
-     * @param msg
-     * @param timeout
-     * @param requestResponseFuture
-     * @param cost
-     * @return
-     * @throws InterruptedException
-     * @throws RequestTimeoutException
-     * @throws MQClientException
-     */
-    private Message waitResponse(Message msg, long timeout, RequestResponseFuture requestResponseFuture, long cost) throws InterruptedException, RequestTimeoutException, MQClientException {
-        //countDownLatch等待
+    private Message waitResponse(Message msg, long timeout, RequestResponseFuture requestResponseFuture,
+        long cost) throws InterruptedException, RequestTimeoutException, MQClientException {
         Message responseMessage = requestResponseFuture.waitResponseMessage(timeout - cost);
         if (responseMessage == null) {
             if (requestResponseFuture.isSendRequestOk()) {
@@ -1909,7 +1881,7 @@ public class DefaultMQProducerImpl implements MQProducerInner {
         final String correlationId = msg.getProperty(MessageConst.PROPERTY_CORRELATION_ID);
 
         final RequestResponseFuture requestResponseFuture = new RequestResponseFuture(correlationId, timeout, requestCallback);
-        RequestFutureTable.getRequestFutureTable().put(correlationId, requestResponseFuture);
+        RequestFutureHolder.getInstance().getRequestFutureTable().put(correlationId, requestResponseFuture);
 
         long cost = System.currentTimeMillis() - beginTimestamp;
         this.sendKernelImpl(msg, mq, CommunicationMode.ASYNC, new SendCallback() {
@@ -1927,7 +1899,7 @@ public class DefaultMQProducerImpl implements MQProducerInner {
     }
 
     private void requestFail(final String correlationId) {
-        RequestResponseFuture responseFuture = RequestFutureTable.getRequestFutureTable().remove(correlationId);
+        RequestResponseFuture responseFuture = RequestFutureHolder.getInstance().getRequestFutureTable().remove(correlationId);
         if (responseFuture != null) {
             responseFuture.setSendRequestOk(false);
             responseFuture.putResponseMessage(null);
