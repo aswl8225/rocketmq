@@ -573,266 +573,266 @@ public class DLedgerCommitLog extends CommitLog {
     }
 
     
-    public PutMessageResult putMessage(final MessageExtBrokerInner msg) {
-
-        StoreStatsService storeStatsService = this.defaultMessageStore.getStoreStatsService();
-        final int tranType = MessageSysFlag.getTransactionValue(msg.getSysFlag());
-        String topic = msg.getTopic();
-        setMessageInfo(msg,tranType);
-
-        // Back to Results
-        AppendMessageResult appendResult;
-        AppendFuture<AppendEntryResponse> dledgerFuture;
-        EncodeResult encodeResult;
-
-        encodeResult = this.messageSerializer.serialize(msg);
-        if (encodeResult.status != AppendMessageStatus.PUT_OK) {
-            return new PutMessageResult(PutMessageStatus.MESSAGE_ILLEGAL, new AppendMessageResult(encodeResult.status));
-        }
-
-        putMessageLock.lock(); //spin or ReentrantLock ,depending on store config
-        long elapsedTimeInLock;
-        long queueOffset;
-        try {
-            beginTimeInDledgerLock = this.defaultMessageStore.getSystemClock().now();
-            /**
-             * 获取queueOffset
-             */
-            queueOffset = getQueueOffsetByKey(encodeResult.queueOffsetKey, tranType);
-            /**
-             * 序列化msg
-             */
-            encodeResult.setQueueOffsetKey(queueOffset, false);
-            AppendEntryRequest request = new AppendEntryRequest();
-            request.setGroup(dLedgerConfig.getGroup());
-            /**
-             * 只有master才会接受producer发送的消息   所以这里指定remoteId为自己
-             */
-            request.setRemoteId(dLedgerServer.getMemberState().getSelfId());
-            request.setBody(encodeResult.getData());
-            /**
-             * dledger   append消息   会在dledger代码中   调用appendHooks   回填commitlog的phyoffset
-             * dledger   append消息   会在dledger代码中   调用appendHooks   回填commitlog的phyoffset
-             * dledger   append消息   会在dledger代码中   调用appendHooks   回填commitlog的phyoffset
-             * dledger   append消息   会在dledger代码中   调用appendHooks   回填commitlog的phyoffset
-             * dledger   append消息   会在dledger代码中   调用appendHooks   回填commitlog的phyoffset
-             */
-            dledgerFuture = (AppendFuture<AppendEntryResponse>) dLedgerServer.handleAppend(request);
-            if (dledgerFuture.getPos() == -1) {
-                return new PutMessageResult(PutMessageStatus.OS_PAGECACHE_BUSY, new AppendMessageResult(AppendMessageStatus.UNKNOWN_ERROR));
-            }
-            /**
-             * dledger模式下   commitlog数据结构   对应的phyoffset
-             *
-             * dledgerFuture.getPos()  为dledgercommitlog存储的位置
-             * dledgerFuture.getPos()+DLedgerEntry.BODY_OFFSET  为commitlog消息体存储的位置
-             */
-            long wroteOffset = dledgerFuture.getPos() + DLedgerEntry.BODY_OFFSET;
-
-            int msgIdLength = (msg.getSysFlag() & MessageSysFlag.STOREHOSTADDRESS_V6_FLAG) == 0 ? 4 + 4 + 8 : 16 + 4 + 8;
-            ByteBuffer buffer = ByteBuffer.allocate(msgIdLength);
-
-            /**
-             * 计算messageId
-             */
-            String msgId = MessageDecoder.createMessageId(buffer, msg.getStoreHostBytes(), wroteOffset);
-            elapsedTimeInLock = this.defaultMessageStore.getSystemClock().now() - beginTimeInDledgerLock;
-            /**
-             * 响应对象
-             */
-            appendResult = new AppendMessageResult(AppendMessageStatus.PUT_OK, wroteOffset, encodeResult.getData().length, msgId, System.currentTimeMillis(), queueOffset, elapsedTimeInLock);
-            switch (tranType) {
-                case MessageSysFlag.TRANSACTION_PREPARED_TYPE:
-                case MessageSysFlag.TRANSACTION_ROLLBACK_TYPE:
-                    break;
-                case MessageSysFlag.TRANSACTION_NOT_TYPE:
-                case MessageSysFlag.TRANSACTION_COMMIT_TYPE:
-                    // The next update ConsumeQueue information
-                    /**
-                     * queueOffset  +1
-                     */
-                    DLedgerCommitLog.this.topicQueueTable.put(encodeResult.queueOffsetKey, queueOffset + 1);
-                    break;
-                default:
-                    break;
-            }
-        } catch (Exception e) {
-            log.error("Put message error", e);
-            return new PutMessageResult(PutMessageStatus.UNKNOWN_ERROR, new AppendMessageResult(AppendMessageStatus.UNKNOWN_ERROR));
-        } finally {
-            beginTimeInDledgerLock = 0;
-            putMessageLock.unlock();
-        }
-
-        if (elapsedTimeInLock > 500) {
-            log.warn("[NOTIFYME]putMessage in lock cost time(ms)={}, bodyLength={} AppendMessageResult={}", elapsedTimeInLock, msg.getBody().length, appendResult);
-        }
-
-        PutMessageStatus putMessageStatus = PutMessageStatus.UNKNOWN_ERROR;
-        try {
-            /**
-             * append操作结果
-             */
-            AppendEntryResponse appendEntryResponse = dledgerFuture.get(3, TimeUnit.SECONDS);
-            switch (DLedgerResponseCode.valueOf(appendEntryResponse.getCode())) {
-                case SUCCESS:
-                    putMessageStatus = PutMessageStatus.PUT_OK;
-                    break;
-                case INCONSISTENT_LEADER:
-                case NOT_LEADER:
-                case LEADER_NOT_READY:
-                case DISK_FULL:
-                    putMessageStatus = PutMessageStatus.SERVICE_NOT_AVAILABLE;
-                    break;
-                case WAIT_QUORUM_ACK_TIMEOUT:
-                    //Do not return flush_slave_timeout to the client, for the ons client will ignore it.
-                    putMessageStatus = PutMessageStatus.OS_PAGECACHE_BUSY;
-                    break;
-                case LEADER_PENDING_FULL:
-                    putMessageStatus = PutMessageStatus.OS_PAGECACHE_BUSY;
-                    break;
-            }
-        } catch (Throwable t) {
-            log.error("Failed to get dledger append result", t);
-        }
-
-        PutMessageResult putMessageResult = new PutMessageResult(putMessageStatus, appendResult);
-        if (putMessageStatus == PutMessageStatus.PUT_OK) {
-            // Statistics
-            storeStatsService.getSinglePutMessageTopicTimesTotal(msg.getTopic()).incrementAndGet();
-            storeStatsService.getSinglePutMessageTopicSizeTotal(topic).addAndGet(appendResult.getWroteBytes());
-        }
-        return putMessageResult;
-    }
-
-    @Override
-    public PutMessageResult putMessages(final MessageExtBatch messageExtBatch) {
-        final int tranType = MessageSysFlag.getTransactionValue(messageExtBatch.getSysFlag());
-
-        if (tranType != MessageSysFlag.TRANSACTION_NOT_TYPE) {
-            return new PutMessageResult(PutMessageStatus.MESSAGE_ILLEGAL, null);
-        }
-        if (messageExtBatch.getDelayTimeLevel() > 0) {
-            return new PutMessageResult(PutMessageStatus.MESSAGE_ILLEGAL, null);
-        }
-
-        // Set the storage time
-        messageExtBatch.setStoreTimestamp(System.currentTimeMillis());
-
-        StoreStatsService storeStatsService = this.defaultMessageStore.getStoreStatsService();
-
-        InetSocketAddress bornSocketAddress = (InetSocketAddress) messageExtBatch.getBornHost();
-        if (bornSocketAddress.getAddress() instanceof Inet6Address) {
-            messageExtBatch.setBornHostV6Flag();
-        }
-
-        InetSocketAddress storeSocketAddress = (InetSocketAddress) messageExtBatch.getStoreHost();
-        if (storeSocketAddress.getAddress() instanceof Inet6Address) {
-            messageExtBatch.setStoreHostAddressV6Flag();
-        }
-
-        // Back to Results
-        AppendMessageResult appendResult;
-        BatchAppendFuture<AppendEntryResponse> dledgerFuture;
-        EncodeResult encodeResult;
-
-        encodeResult = this.messageSerializer.serialize(messageExtBatch);
-        if (encodeResult.status != AppendMessageStatus.PUT_OK) {
-            return new PutMessageResult(PutMessageStatus.MESSAGE_ILLEGAL, new AppendMessageResult(encodeResult
-                    .status));
-        }
-
-        putMessageLock.lock(); //spin or ReentrantLock ,depending on store config
-        msgIdBuilder.setLength(0);
-        long elapsedTimeInLock;
-        long queueOffset;
-        long msgNum = 0;
-        try {
-            beginTimeInDledgerLock = this.defaultMessageStore.getSystemClock().now();
-            queueOffset = getQueueOffsetByKey(encodeResult.queueOffsetKey, tranType);
-            encodeResult.setQueueOffsetKey(queueOffset, true);
-            BatchAppendEntryRequest request = new BatchAppendEntryRequest();
-            request.setGroup(dLedgerConfig.getGroup());
-            request.setRemoteId(dLedgerServer.getMemberState().getSelfId());
-            request.setBatchMsgs(encodeResult.batchData);
-            dledgerFuture = (BatchAppendFuture<AppendEntryResponse>) dLedgerServer.handleAppend(request);
-            if (dledgerFuture.getPos() == -1) {
-                log.warn("HandleAppend return false due to error code {}", dledgerFuture.get().getCode());
-                return new PutMessageResult(PutMessageStatus.OS_PAGECACHE_BUSY, new AppendMessageResult(AppendMessageStatus.UNKNOWN_ERROR));
-            }
-            long wroteOffset = 0;
-
-            int msgIdLength = (messageExtBatch.getSysFlag() & MessageSysFlag.STOREHOSTADDRESS_V6_FLAG) == 0 ? 4 + 4 + 8 : 16 + 4 + 8;
-            ByteBuffer buffer = ByteBuffer.allocate(msgIdLength);
-
-            boolean isFirstOffset = true;
-            long firstWroteOffset = 0;
-            for (long pos : dledgerFuture.getPositions()) {
-                wroteOffset = pos + DLedgerEntry.BODY_OFFSET;
-                if (isFirstOffset) {
-                    firstWroteOffset = wroteOffset;
-                    isFirstOffset = false;
-                }
-                String msgId = MessageDecoder.createMessageId(buffer, messageExtBatch.getStoreHostBytes(), wroteOffset);
-                if (msgIdBuilder.length() > 0) {
-                    msgIdBuilder.append(',').append(msgId);
-                } else {
-                    msgIdBuilder.append(msgId);
-                }
-                msgNum++;
-            }
-
-            elapsedTimeInLock = this.defaultMessageStore.getSystemClock().now() - beginTimeInDledgerLock;
-            appendResult = new AppendMessageResult(AppendMessageStatus.PUT_OK, firstWroteOffset, encodeResult.totalMsgLen,
-                    msgIdBuilder.toString(), System.currentTimeMillis(), queueOffset, elapsedTimeInLock);
-            DLedgerCommitLog.this.topicQueueTable.put(encodeResult.queueOffsetKey, queueOffset + msgNum);
-        } catch (Exception e) {
-            log.error("Put message error", e);
-            return new PutMessageResult(PutMessageStatus.UNKNOWN_ERROR, new AppendMessageResult(AppendMessageStatus
-                    .UNKNOWN_ERROR));
-        } finally {
-            beginTimeInDledgerLock = 0;
-            putMessageLock.unlock();
-        }
-
-        if (elapsedTimeInLock > 500) {
-            log.warn("[NOTIFYME]putMessage in lock cost time(ms)={}, bodyLength={} AppendMessageResult={}",
-                    elapsedTimeInLock, messageExtBatch.getBody().length, appendResult);
-        }
-
-        PutMessageStatus putMessageStatus = PutMessageStatus.UNKNOWN_ERROR;
-        try {
-            AppendEntryResponse appendEntryResponse = dledgerFuture.get(3, TimeUnit.SECONDS);
-            switch (DLedgerResponseCode.valueOf(appendEntryResponse.getCode())) {
-                case SUCCESS:
-                    putMessageStatus = PutMessageStatus.PUT_OK;
-                    break;
-                case INCONSISTENT_LEADER:
-                case NOT_LEADER:
-                case LEADER_NOT_READY:
-                case DISK_FULL:
-                    putMessageStatus = PutMessageStatus.SERVICE_NOT_AVAILABLE;
-                    break;
-                case WAIT_QUORUM_ACK_TIMEOUT:
-                    //Do not return flush_slave_timeout to the client, for the ons client will ignore it.
-                    putMessageStatus = PutMessageStatus.OS_PAGECACHE_BUSY;
-                    break;
-                case LEADER_PENDING_FULL:
-                    putMessageStatus = PutMessageStatus.OS_PAGECACHE_BUSY;
-                    break;
-            }
-        } catch (Throwable t) {
-            log.error("Failed to get dledger append result", t);
-        }
-
-        PutMessageResult putMessageResult = new PutMessageResult(putMessageStatus, appendResult);
-        if (putMessageStatus == PutMessageStatus.PUT_OK) {
-            // Statistics
-            storeStatsService.getSinglePutMessageTopicTimesTotal(messageExtBatch.getTopic()).addAndGet(msgNum);
-            storeStatsService.getSinglePutMessageTopicSizeTotal(messageExtBatch.getTopic()).addAndGet(encodeResult.totalMsgLen);
-        }
-        return putMessageResult;
-    }
+//    public PutMessageResult putMessage(final MessageExtBrokerInner msg) {
+//
+//        StoreStatsService storeStatsService = this.defaultMessageStore.getStoreStatsService();
+//        final int tranType = MessageSysFlag.getTransactionValue(msg.getSysFlag());
+//        String topic = msg.getTopic();
+//        setMessageInfo(msg,tranType);
+//
+//        // Back to Results
+//        AppendMessageResult appendResult;
+//        AppendFuture<AppendEntryResponse> dledgerFuture;
+//        EncodeResult encodeResult;
+//
+//        encodeResult = this.messageSerializer.serialize(msg);
+//        if (encodeResult.status != AppendMessageStatus.PUT_OK) {
+//            return new PutMessageResult(PutMessageStatus.MESSAGE_ILLEGAL, new AppendMessageResult(encodeResult.status));
+//        }
+//
+//        putMessageLock.lock(); //spin or ReentrantLock ,depending on store config
+//        long elapsedTimeInLock;
+//        long queueOffset;
+//        try {
+//            beginTimeInDledgerLock = this.defaultMessageStore.getSystemClock().now();
+//            /**
+//             * 获取queueOffset
+//             */
+//            queueOffset = getQueueOffsetByKey(encodeResult.queueOffsetKey, tranType);
+//            /**
+//             * 序列化msg
+//             */
+//            encodeResult.setQueueOffsetKey(queueOffset, false);
+//            AppendEntryRequest request = new AppendEntryRequest();
+//            request.setGroup(dLedgerConfig.getGroup());
+//            /**
+//             * 只有master才会接受producer发送的消息   所以这里指定remoteId为自己
+//             */
+//            request.setRemoteId(dLedgerServer.getMemberState().getSelfId());
+//            request.setBody(encodeResult.getData());
+//            /**
+//             * dledger   append消息   会在dledger代码中   调用appendHooks   回填commitlog的phyoffset
+//             * dledger   append消息   会在dledger代码中   调用appendHooks   回填commitlog的phyoffset
+//             * dledger   append消息   会在dledger代码中   调用appendHooks   回填commitlog的phyoffset
+//             * dledger   append消息   会在dledger代码中   调用appendHooks   回填commitlog的phyoffset
+//             * dledger   append消息   会在dledger代码中   调用appendHooks   回填commitlog的phyoffset
+//             */
+//            dledgerFuture = (AppendFuture<AppendEntryResponse>) dLedgerServer.handleAppend(request);
+//            if (dledgerFuture.getPos() == -1) {
+//                return new PutMessageResult(PutMessageStatus.OS_PAGECACHE_BUSY, new AppendMessageResult(AppendMessageStatus.UNKNOWN_ERROR));
+//            }
+//            /**
+//             * dledger模式下   commitlog数据结构   对应的phyoffset
+//             *
+//             * dledgerFuture.getPos()  为dledgercommitlog存储的位置
+//             * dledgerFuture.getPos()+DLedgerEntry.BODY_OFFSET  为commitlog消息体存储的位置
+//             */
+//            long wroteOffset = dledgerFuture.getPos() + DLedgerEntry.BODY_OFFSET;
+//
+//            int msgIdLength = (msg.getSysFlag() & MessageSysFlag.STOREHOSTADDRESS_V6_FLAG) == 0 ? 4 + 4 + 8 : 16 + 4 + 8;
+//            ByteBuffer buffer = ByteBuffer.allocate(msgIdLength);
+//
+//            /**
+//             * 计算messageId
+//             */
+//            String msgId = MessageDecoder.createMessageId(buffer, msg.getStoreHostBytes(), wroteOffset);
+//            elapsedTimeInLock = this.defaultMessageStore.getSystemClock().now() - beginTimeInDledgerLock;
+//            /**
+//             * 响应对象
+//             */
+//            appendResult = new AppendMessageResult(AppendMessageStatus.PUT_OK, wroteOffset, encodeResult.getData().length, msgId, System.currentTimeMillis(), queueOffset, elapsedTimeInLock);
+//            switch (tranType) {
+//                case MessageSysFlag.TRANSACTION_PREPARED_TYPE:
+//                case MessageSysFlag.TRANSACTION_ROLLBACK_TYPE:
+//                    break;
+//                case MessageSysFlag.TRANSACTION_NOT_TYPE:
+//                case MessageSysFlag.TRANSACTION_COMMIT_TYPE:
+//                    // The next update ConsumeQueue information
+//                    /**
+//                     * queueOffset  +1
+//                     */
+//                    DLedgerCommitLog.this.topicQueueTable.put(encodeResult.queueOffsetKey, queueOffset + 1);
+//                    break;
+//                default:
+//                    break;
+//            }
+//        } catch (Exception e) {
+//            log.error("Put message error", e);
+//            return new PutMessageResult(PutMessageStatus.UNKNOWN_ERROR, new AppendMessageResult(AppendMessageStatus.UNKNOWN_ERROR));
+//        } finally {
+//            beginTimeInDledgerLock = 0;
+//            putMessageLock.unlock();
+//        }
+//
+//        if (elapsedTimeInLock > 500) {
+//            log.warn("[NOTIFYME]putMessage in lock cost time(ms)={}, bodyLength={} AppendMessageResult={}", elapsedTimeInLock, msg.getBody().length, appendResult);
+//        }
+//
+//        PutMessageStatus putMessageStatus = PutMessageStatus.UNKNOWN_ERROR;
+//        try {
+//            /**
+//             * append操作结果
+//             */
+//            AppendEntryResponse appendEntryResponse = dledgerFuture.get(3, TimeUnit.SECONDS);
+//            switch (DLedgerResponseCode.valueOf(appendEntryResponse.getCode())) {
+//                case SUCCESS:
+//                    putMessageStatus = PutMessageStatus.PUT_OK;
+//                    break;
+//                case INCONSISTENT_LEADER:
+//                case NOT_LEADER:
+//                case LEADER_NOT_READY:
+//                case DISK_FULL:
+//                    putMessageStatus = PutMessageStatus.SERVICE_NOT_AVAILABLE;
+//                    break;
+//                case WAIT_QUORUM_ACK_TIMEOUT:
+//                    //Do not return flush_slave_timeout to the client, for the ons client will ignore it.
+//                    putMessageStatus = PutMessageStatus.OS_PAGECACHE_BUSY;
+//                    break;
+//                case LEADER_PENDING_FULL:
+//                    putMessageStatus = PutMessageStatus.OS_PAGECACHE_BUSY;
+//                    break;
+//            }
+//        } catch (Throwable t) {
+//            log.error("Failed to get dledger append result", t);
+//        }
+//
+//        PutMessageResult putMessageResult = new PutMessageResult(putMessageStatus, appendResult);
+//        if (putMessageStatus == PutMessageStatus.PUT_OK) {
+//            // Statistics
+//            storeStatsService.getSinglePutMessageTopicTimesTotal(msg.getTopic()).incrementAndGet();
+//            storeStatsService.getSinglePutMessageTopicSizeTotal(topic).addAndGet(appendResult.getWroteBytes());
+//        }
+//        return putMessageResult;
+//    }
+//
+//    @Override
+//    public PutMessageResult putMessages(final MessageExtBatch messageExtBatch) {
+//        final int tranType = MessageSysFlag.getTransactionValue(messageExtBatch.getSysFlag());
+//
+//        if (tranType != MessageSysFlag.TRANSACTION_NOT_TYPE) {
+//            return new PutMessageResult(PutMessageStatus.MESSAGE_ILLEGAL, null);
+//        }
+//        if (messageExtBatch.getDelayTimeLevel() > 0) {
+//            return new PutMessageResult(PutMessageStatus.MESSAGE_ILLEGAL, null);
+//        }
+//
+//        // Set the storage time
+//        messageExtBatch.setStoreTimestamp(System.currentTimeMillis());
+//
+//        StoreStatsService storeStatsService = this.defaultMessageStore.getStoreStatsService();
+//
+//        InetSocketAddress bornSocketAddress = (InetSocketAddress) messageExtBatch.getBornHost();
+//        if (bornSocketAddress.getAddress() instanceof Inet6Address) {
+//            messageExtBatch.setBornHostV6Flag();
+//        }
+//
+//        InetSocketAddress storeSocketAddress = (InetSocketAddress) messageExtBatch.getStoreHost();
+//        if (storeSocketAddress.getAddress() instanceof Inet6Address) {
+//            messageExtBatch.setStoreHostAddressV6Flag();
+//        }
+//
+//        // Back to Results
+//        AppendMessageResult appendResult;
+//        BatchAppendFuture<AppendEntryResponse> dledgerFuture;
+//        EncodeResult encodeResult;
+//
+//        encodeResult = this.messageSerializer.serialize(messageExtBatch);
+//        if (encodeResult.status != AppendMessageStatus.PUT_OK) {
+//            return new PutMessageResult(PutMessageStatus.MESSAGE_ILLEGAL, new AppendMessageResult(encodeResult
+//                    .status));
+//        }
+//
+//        putMessageLock.lock(); //spin or ReentrantLock ,depending on store config
+//        msgIdBuilder.setLength(0);
+//        long elapsedTimeInLock;
+//        long queueOffset;
+//        long msgNum = 0;
+//        try {
+//            beginTimeInDledgerLock = this.defaultMessageStore.getSystemClock().now();
+//            queueOffset = getQueueOffsetByKey(encodeResult.queueOffsetKey, tranType);
+//            encodeResult.setQueueOffsetKey(queueOffset, true);
+//            BatchAppendEntryRequest request = new BatchAppendEntryRequest();
+//            request.setGroup(dLedgerConfig.getGroup());
+//            request.setRemoteId(dLedgerServer.getMemberState().getSelfId());
+//            request.setBatchMsgs(encodeResult.batchData);
+//            dledgerFuture = (BatchAppendFuture<AppendEntryResponse>) dLedgerServer.handleAppend(request);
+//            if (dledgerFuture.getPos() == -1) {
+//                log.warn("HandleAppend return false due to error code {}", dledgerFuture.get().getCode());
+//                return new PutMessageResult(PutMessageStatus.OS_PAGECACHE_BUSY, new AppendMessageResult(AppendMessageStatus.UNKNOWN_ERROR));
+//            }
+//            long wroteOffset = 0;
+//
+//            int msgIdLength = (messageExtBatch.getSysFlag() & MessageSysFlag.STOREHOSTADDRESS_V6_FLAG) == 0 ? 4 + 4 + 8 : 16 + 4 + 8;
+//            ByteBuffer buffer = ByteBuffer.allocate(msgIdLength);
+//
+//            boolean isFirstOffset = true;
+//            long firstWroteOffset = 0;
+//            for (long pos : dledgerFuture.getPositions()) {
+//                wroteOffset = pos + DLedgerEntry.BODY_OFFSET;
+//                if (isFirstOffset) {
+//                    firstWroteOffset = wroteOffset;
+//                    isFirstOffset = false;
+//                }
+//                String msgId = MessageDecoder.createMessageId(buffer, messageExtBatch.getStoreHostBytes(), wroteOffset);
+//                if (msgIdBuilder.length() > 0) {
+//                    msgIdBuilder.append(',').append(msgId);
+//                } else {
+//                    msgIdBuilder.append(msgId);
+//                }
+//                msgNum++;
+//            }
+//
+//            elapsedTimeInLock = this.defaultMessageStore.getSystemClock().now() - beginTimeInDledgerLock;
+//            appendResult = new AppendMessageResult(AppendMessageStatus.PUT_OK, firstWroteOffset, encodeResult.totalMsgLen,
+//                    msgIdBuilder.toString(), System.currentTimeMillis(), queueOffset, elapsedTimeInLock);
+//            DLedgerCommitLog.this.topicQueueTable.put(encodeResult.queueOffsetKey, queueOffset + msgNum);
+//        } catch (Exception e) {
+//            log.error("Put message error", e);
+//            return new PutMessageResult(PutMessageStatus.UNKNOWN_ERROR, new AppendMessageResult(AppendMessageStatus
+//                    .UNKNOWN_ERROR));
+//        } finally {
+//            beginTimeInDledgerLock = 0;
+//            putMessageLock.unlock();
+//        }
+//
+//        if (elapsedTimeInLock > 500) {
+//            log.warn("[NOTIFYME]putMessage in lock cost time(ms)={}, bodyLength={} AppendMessageResult={}",
+//                    elapsedTimeInLock, messageExtBatch.getBody().length, appendResult);
+//        }
+//
+//        PutMessageStatus putMessageStatus = PutMessageStatus.UNKNOWN_ERROR;
+//        try {
+//            AppendEntryResponse appendEntryResponse = dledgerFuture.get(3, TimeUnit.SECONDS);
+//            switch (DLedgerResponseCode.valueOf(appendEntryResponse.getCode())) {
+//                case SUCCESS:
+//                    putMessageStatus = PutMessageStatus.PUT_OK;
+//                    break;
+//                case INCONSISTENT_LEADER:
+//                case NOT_LEADER:
+//                case LEADER_NOT_READY:
+//                case DISK_FULL:
+//                    putMessageStatus = PutMessageStatus.SERVICE_NOT_AVAILABLE;
+//                    break;
+//                case WAIT_QUORUM_ACK_TIMEOUT:
+//                    //Do not return flush_slave_timeout to the client, for the ons client will ignore it.
+//                    putMessageStatus = PutMessageStatus.OS_PAGECACHE_BUSY;
+//                    break;
+//                case LEADER_PENDING_FULL:
+//                    putMessageStatus = PutMessageStatus.OS_PAGECACHE_BUSY;
+//                    break;
+//            }
+//        } catch (Throwable t) {
+//            log.error("Failed to get dledger append result", t);
+//        }
+//
+//        PutMessageResult putMessageResult = new PutMessageResult(putMessageStatus, appendResult);
+//        if (putMessageStatus == PutMessageStatus.PUT_OK) {
+//            // Statistics
+//            storeStatsService.getSinglePutMessageTopicTimesTotal(messageExtBatch.getTopic()).addAndGet(msgNum);
+//            storeStatsService.getSinglePutMessageTopicSizeTotal(messageExtBatch.getTopic()).addAndGet(encodeResult.totalMsgLen);
+//        }
+//        return putMessageResult;
+//    }
 
     @Override
     public CompletableFuture<PutMessageResult> asyncPutMessage(MessageExtBrokerInner msg) {
